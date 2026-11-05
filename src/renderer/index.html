@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none';" />
+  <title>Echo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <div id="drag-handle">
+        <span class="dot" id="status-dot"></span>
+        <span id="title">Echo</span>
+        <span id="live-badge" class="hidden" title="Listening to mic + system audio">Live</span>
+        <span id="thinking-indicator" class="hidden" title="Generating an answer…">Thinking</span>
+        <button id="new-answer-chip-compact" type="button" class="new-answer-chip hidden" title="A newer answer is ready -- click to show it (the current one stays until you do)">New answer</button>
+        <span id="privacy-badge" class="hidden" title="Screen capture disabled, automatic suggestions paused (Ctrl+Shift+P to turn off)">Privacy</span>
+        <span id="content-protection-badge" class="hidden" title="Hidden from screen sharing/recording (Ctrl+Shift+H to turn off)">Hidden</span>
+        <button id="gesture-badge" type="button" class="hidden" title="Hand gestures are on: the camera is in use. Click to turn them off.">Gestures</button>
+      </div>
+      <div id="header-actions">
+        <div id="menu-wrap">
+          <button id="menu-btn" class="icon-btn" title="Menu">&#8943;</button>
+          <div id="menu" class="hidden">
+            <button id="api-keys-btn" title="Add, test or remove your Groq + Gemini API keys">API keys</button>
+            <button id="shortcuts-btn" title="Show all keyboard shortcuts">Keyboard shortcuts</button>
+            <button id="gestures-menu-btn" title="Webcam hand-gesture shortcuts (experimental, off by default)">Hand gestures&hellip;</button>
+            <button id="hide-from-share-btn" title="Hide this overlay from screen sharing/recording -- off by default, only turn this on if whoever you're sharing with knows (Ctrl+Shift+H)">Hide from Screen Share: Off</button>
+          </div>
+        </div>
+        <button id="compact-btn" class="icon-btn" title="Compact bar: show only the latest answer (Ctrl+Shift+K)">&#9645;</button>
+        <button id="minimize-btn" class="icon-btn" title="Hide (bring back from the tray icon, or Ctrl+Shift+Space)">&#8211;</button>
+        <button id="hide-btn" class="icon-btn" title="Hide (bring back from the tray icon, or Ctrl+Shift+Space)">&times;</button>
+      </div>
+    </header>
+
+    <div id="key-warning" class="warning hidden"></div>
+
+    <div id="controls">
+      <button id="listen-btn" class="primary" title="Listen to mic + system audio and transcribe it">Start Listening</button>
+      <select id="mode-select" title="Answer style for every suggestion">
+        <option value="interview">Interview</option>
+        <option value="meeting">Meeting</option>
+        <option value="presentation">Presentation</option>
+        <option value="general">General</option>
+      </select>
+      <div id="audio-indicators">
+        <span class="indicator" id="mic-indicator">Mic</span>
+        <span class="indicator" id="system-indicator">System audio</span>
+      </div>
+    </div>
+
+    <section id="knowledge-section" class="collapsible">
+      <div class="section-label">
+        <span class="section-title">Knowledge base</span>
+        <button id="add-knowledge-files-btn" title="Add .txt/.md files (CV, notes)">Add Files</button>
+        <button id="open-knowledge-folder-btn" title="Open your personal knowledge folder">Open Folder</button>
+        <button id="reload-knowledge-btn" title="Reload files from the knowledge folder">Reload</button>
+      </div>
+      <div id="knowledge-status" class="placeholder">Loading…</div>
+    </section>
+
+    <section id="screen-section" class="collapsible">
+      <div class="section-label">
+        <span class="section-title">Screen context</span>
+        <button id="refresh-sources-btn" title="Refresh list of screens/windows">Refresh</button>
+      </div>
+      <div id="screen-controls">
+        <select id="screen-source-select" title="Which screen or window to capture"></select>
+        <button id="capture-screen-btn" title="Capture now (Ctrl+Shift+S)">Capture</button>
+        <button id="clear-screen-btn" title="Remove all attached screenshots">Clear all</button>
+      </div>
+      <div id="privacy-screen-note" class="hidden placeholder">Screen capture is disabled while Privacy Mode is active.</div>
+      <!-- Screenshot tray: up to 4 captures, sent with the next answer/question. -->
+      <div id="screen-preview-row" class="hidden">
+        <ul id="screen-thumb" class="shot-tray" aria-label="Attached screenshots"></ul>
+        <span id="screen-status" class="placeholder" aria-live="polite"></span>
+      </div>
+      <label class="shot-keep" title="Off: the tray is emptied after a screenshot is sent. On: screenshots stay attached until you remove them.">
+        <input type="checkbox" id="keep-screenshots-toggle" />
+        Keep screenshots after sending
+      </label>
+    </section>
+
+    <section id="transcript-section" class="collapsible">
+      <div class="section-label">
+        <span class="section-title">Live transcript</span>
+        <button id="summarize-btn" title="Summarize this session (Ctrl+Shift+M)">Summarize</button>
+      </div>
+      <div id="transcript"></div>
+    </section>
+
+    <section id="suggestion-section">
+      <div class="section-label">
+        <span class="section-title">Suggested response</span>
+        <div class="section-label-actions">
+          <!-- Outside the answer box so it never covers or moves the text (CALM ANSWERS
+               in renderer.js). The compact bar uses the header copy. -->
+          <button id="new-answer-chip" type="button" class="new-answer-chip hidden" title="A newer answer is ready -- click to show it (the current one stays until you do)">New answer ready</button>
+          <button id="expand-suggestion-btn" title="Fill the overlay with this panel (Ctrl+Shift+E)">Focus</button>
+          <button id="generate-btn" title="Generate now (Ctrl+Enter)">Generate</button>
+        </div>
+      </div>
+      <div id="suggestion-body">
+        <div id="suggestion-question" class="hidden" title="The question this answer is responding to"></div>
+        <div id="suggestion-error" class="hidden" role="alert"></div>
+        <div id="suggestion-placeholder" class="placeholder">
+          Suggestions will appear here once a question is detected, or press Ctrl+Enter / Generate anytime.
+        </div>
+        <div id="suggestion-text" class="hidden"></div>
+        <div id="suggestion-actions" class="hidden">
+          <button data-action="shorten" title="Rewrite it shorter (1-2 sentences)">Shorten</button>
+          <button data-action="expand" title="Add more concrete detail">Expand</button>
+          <button data-action="regenerate" title="Generate a fresh answer (Ctrl+Enter)">Regenerate</button>
+          <button data-action="copy" title="Copy the answer">Copy</button>
+        </div>
+        <div id="suggestion-grounding" class="hidden"></div>
+      </div>
+    </section>
+
+    <section id="chat-section" class="collapsible">
+      <div class="section-label"><span class="section-title">Ask the assistant</span></div>
+      <div id="chat-log"></div>
+      <form id="chat-form">
+        <input id="chat-input" type="text" placeholder="e.g. what are they actually asking?" autocomplete="off" />
+        <button type="submit">Ask</button>
+      </form>
+    </section>
+
+    <div id="summary-overlay" class="hidden">
+      <div id="summary-header">
+        <span>Session Summary</span>
+        <div id="summary-header-actions">
+          <button id="copy-summary-btn" title="Copy the whole summary as text">Copy</button>
+          <button id="export-summary-btn" title="Save the summary to a file">Export</button>
+          <button id="close-summary-btn" title="Close">&times;</button>
+        </div>
+      </div>
+      <div id="summary-body">
+        <div id="summary-loading" class="placeholder hidden">Summarizing…</div>
+        <div id="summary-empty" class="placeholder hidden">
+          Nothing to summarize yet — start listening and have a conversation first.
+        </div>
+        <div id="summary-content" class="hidden">
+          <h4>Summary</h4>
+          <p id="summary-text-block"></p>
+          <h4>Decisions</h4>
+          <ul id="summary-decisions"></ul>
+          <h4>Action items</h4>
+          <ul id="summary-actions-list"></ul>
+          <h4>Unresolved questions</h4>
+          <ul id="summary-unresolved"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div id="diagnostics-overlay" class="hidden">
+      <div id="diagnostics-header">
+        <span>Diagnostics</span>
+        <div id="diagnostics-header-actions">
+          <button id="close-diagnostics-btn" title="Close">&times;</button>
+        </div>
+      </div>
+      <div id="diagnostics-body">
+        <h4>State</h4>
+        <ul id="diagnostics-state"></ul>
+        <h4>Recent activity (most recent first)</h4>
+        <ul id="diagnostics-events"></ul>
+      </div>
+    </div>
+
+    <div id="settings-overlay" class="hidden" role="dialog" aria-labelledby="settings-title">
+      <div id="settings-header">
+        <span id="settings-title">Settings</span>
+        <div id="settings-header-actions">
+          <button id="close-settings-btn" title="Close">&times;</button>
+        </div>
+      </div>
+      <div id="settings-body">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <p id="settings-intro" class="placeholder">
+          Echo is bring-your-own-keys: it talks straight to Groq (speech-to-text) and Google Gemini (answers)
+          with your own API keys. Both have free tiers.
+        </p>
+
+        <form id="settings-form" autocomplete="off">
+          <div class="key-field">
+            <div class="key-field-head">
+              <label for="groq-key-input">Groq API key</label>
+              <span id="groq-key-state" class="key-state">Not set</span>
+            </div>
+            <input id="groq-key-input" type="password" placeholder="Paste a new Groq key" spellcheck="false" />
+            <div class="key-help">
+              Free key: <span class="key-url">console.groq.com/keys</span>
+              <button type="button" id="open-groq-keys-btn" class="link-btn" title="Open https://console.groq.com/keys in your browser">Open</button>
+            </div>
+          </div>
+
+          <div class="key-field">
+            <div class="key-field-head">
+              <label for="gemini-key-input">Gemini API key</label>
+              <span id="gemini-key-state" class="key-state">Not set</span>
+            </div>
+            <input id="gemini-key-input" type="password" placeholder="Paste a new Gemini key" spellcheck="false" />
+            <div class="key-help">
+              Free key: <span class="key-url">aistudio.google.com/apikey</span>
+              <button type="button" id="open-gemini-keys-btn" class="link-btn" title="Open https://aistudio.google.com/apikey in your browser">Open</button>
+            </div>
+          </div>
+
+          <div id="settings-message" role="status" aria-live="polite"></div>
+
+          <div id="settings-actions">
+            <button type="submit" id="save-keys-btn" class="primary">Save keys</button>
+            <button type="button" id="test-keys-btn" title="Check both keys with a free, read-only request">Test keys</button>
+          </div>
+        </form>
+
+        <p id="settings-storage-note" class="placeholder"></p>
+
+        <div id="answer-settings">
+          <h4>Answers</h4>
+          <label class="answer-setting" for="quality-select">
+            <span>Quality vs speed</span>
+            <select id="quality-select" title="How hard Gemini thinks before answering">
+              <option value="auto">Auto (recommended)</option>
+              <option value="fast">Fast</option>
+              <option value="max">Max quality</option>
+            </select>
+          </label>
+          <p class="answer-setting-note">Auto thinks harder on interview coding, maths, probability and design questions and stays quick everywhere else. Fast always answers quickest; Max always thinks hardest (slower).</p>
+          <p id="model-note" class="answer-setting-note"></p>
+        </div>
+
+        <div id="settings-privacy">
+          <h4>Where your data goes</h4>
+          <ul>
+            <li>Audio chunks go to <strong>Groq</strong> for transcription, under your key.</li>
+            <li>Transcript text, matched knowledge-base snippets and any screenshots you attach go to <strong>Google Gemini</strong>, under your key.</li>
+            <li>Nothing goes to any Echo server &mdash; there isn't one.</li>
+            <li>On Gemini's free tier, Google may use your prompts and responses to improve its products. Use a paid (billing-enabled) key to avoid that.</li>
+          </ul>
+        </div>
+
+        <button type="button" id="remove-keys-btn" title="Delete the keys saved by this app from this computer">Remove saved keys</button>
+
+        <!-- Hand gestures (experimental, opt-in). Wired up by gestures.js;
+             the gesture table body is rendered from gesture-core.js. -->
+        <div id="gesture-settings" aria-labelledby="gesture-settings-title">
+          <h4 id="gesture-settings-title">Hand gestures <span class="gesture-tag">Experimental</span></h4>
+          <label class="gesture-switch" for="gesture-enable-toggle">
+            <input type="checkbox" id="gesture-enable-toggle" />
+            <span>Use webcam hand gestures as shortcuts</span>
+          </label>
+          <label class="gesture-switch" for="gesture-preview-toggle">
+            <input type="checkbox" id="gesture-preview-toggle" checked />
+            <span>Show camera preview</span>
+          </label>
+          <div id="gesture-status" role="status" aria-live="polite"></div>
+          <table id="gesture-map" class="gesture-map">
+            <caption>Hold a sign steady for about a second</caption>
+            <thead><tr><th scope="col">Sign</th><th scope="col">Does</th></tr></thead>
+            <tbody id="gesture-map-body"></tbody>
+          </table>
+          <p id="gesture-privacy-note" class="gesture-note">
+            Camera frames are processed locally on your computer and are never saved or sent anywhere; the camera light will be on while gestures are enabled. If you share your camera on a call, others will see your hand signs.
+          </p>
+          <p class="gesture-note">Gestures are ignored while Settings is open, while you're typing in Echo, and in Privacy Mode. One hand, good light, facing the camera works best.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hand gestures: hold-to-confirm progress + small mirrored camera preview -->
+    <div id="gesture-hold" class="hidden" role="status" aria-live="off">
+      <span id="gesture-hold-label"></span>
+      <span id="gesture-hold-track"><span id="gesture-hold-bar"></span></span>
+    </div>
+    <div id="gesture-preview" class="hidden">
+      <video id="gesture-video" muted playsinline disablepictureinpicture></video>
+      <span id="gesture-preview-label"></span>
+      <button id="gesture-preview-close" type="button" title="Hide the camera preview (gestures keep working)" aria-label="Hide camera preview">&times;</button>
+    </div>
+
+    <div id="toast" class="hidden" role="status"></div>
+  </div>
+
+  <script src="renderer.js"></script>
+  <script src="gesture-core.js"></script>
+  <script src="gestures.js"></script>
+</body>
+</html>
