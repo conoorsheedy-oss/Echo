@@ -98,6 +98,7 @@
           <!-- Outside the answer box so it never covers or moves the text (CALM ANSWERS
                in renderer.js). The compact bar uses the header copy. -->
           <button id="new-answer-chip" type="button" class="new-answer-chip hidden" title="A newer answer is ready -- click to show it (the current one stays until you do)">New answer ready</button>
+          <button id="answer-style-chip" type="button" aria-pressed="false" title="Answer style: Script (full sentences to say). Click for Cues (a first line + keywords).">Script</button>
           <button id="expand-suggestion-btn" title="Fill the overlay with this panel (Ctrl+Shift+E)">Focus</button>
           <button id="generate-btn" title="Generate now (Ctrl+Enter)">Generate</button>
         </div>
@@ -229,7 +230,15 @@
               <option value="max">Max quality</option>
             </select>
           </label>
-          <p class="answer-setting-note">Auto thinks harder on interview coding, maths, probability and design questions and stays quick everywhere else. Fast always answers quickest; Max always thinks hardest (slower).</p>
+          <p class="answer-setting-note">Auto thinks harder only on interview coding, maths, probability, puzzle and design questions (or when screenshots are attached) and stays quick everywhere else, behavioural questions included. Fast always answers quickest; Max always thinks hardest (slower).</p>
+          <label class="answer-setting" for="answer-style-select">
+            <span>Answer style</span>
+            <select id="answer-style-select" title="Script: full sentences to say. Cues: a first line to say, then keywords to talk around.">
+              <option value="script">Script (full sentences)</option>
+              <option value="cues">Cues (keywords)</option>
+            </select>
+          </label>
+          <p class="answer-setting-note">Script gives you sentences to say, one per line. Cues gives you a first line to say, then 3-4 bold keywords to talk around in your own words. Also switchable with the Script/Cues chip next to "Suggested response".</p>
           <p id="model-note" class="answer-setting-note"></p>
         </div>
 
@@ -285,6 +294,7 @@
     <div id="toast" class="hidden" role="status"></div>
   </div>
 
+  <script src="vad-core.js"></script>
   <script src="renderer.js"></script>
   <script src="gesture-core.js"></script>
   <script src="gestures.js"></script>

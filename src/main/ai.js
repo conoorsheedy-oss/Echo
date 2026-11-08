@@ -12,6 +12,7 @@
 // provider's short error status (e.g. RESOURCE_EXHAUSTED) are ever logged.
 
 const keyStore = require('./keyStore');
+const { humanizeAnswer, createStreamHumanizer } = require('./humanize');
 
 const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const GROQ_MODELS_URL = 'https://api.groq.com/openai/v1/models';
@@ -20,7 +21,7 @@ const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_GROQ_STT_MODEL = 'whisper-large-v3-turbo';
 const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 
-const STT_TIMEOUT_MS = 20_000; // a 6s audio chunk transcribes well within this
+const STT_TIMEOUT_MS = 20_000; // a chunk (at most ~12 s of speech) transcribes well within this
 const AI_TIMEOUT_MS = 45_000; // suggestions + chat answers
 const SUMMARY_TIMEOUT_MS = 75_000; // a summary covers the whole transcript
 const KEY_TEST_TIMEOUT_MS = 15_000;
@@ -240,34 +241,92 @@ async function transcribeAudio({ base64, mimeType }) {
 // =====================================================================
 
 // ---- Prompts ----
-const SCREEN_NOTE = `\nOne or more attached screen images may be included (in the order they were captured, oldest first). If they are, use them as context — read any visible code, error messages, slides, questions, or diagrams — before answering; a problem can be split across several screenshots, so consider them together. Their names (e.g. window/tab titles) are also given to you in the prompt.`;
-const KNOWLEDGE_NOTE = `\nRelevant background material about the user may be included, pulled from their own CV/notes/project files. Ground your answer in it and prefer it over generic knowledge; never invent details, projects, or experience beyond what's given there or stated in the transcript.`;
+// Prompts avoid em dashes themselves: models copy the punctuation they see.
+const SCREEN_NOTE = `\nOne or more attached screen images may be included (in the order they were captured, oldest first). If they are, use them as context: read any visible code, error messages, slides, questions, or diagrams before answering. A problem can be split across several screenshots, so consider them together. Their names (e.g. window/tab titles) are also given to you in the prompt.`;
+
+// Knowledge files are often AI-written CVs: facts yes, wording never.
+const KNOWLEDGE_NOTE = `\nBackground material about the user may be included, pulled from their own CV/notes/project files. Use it ONLY as a source of facts: which projects, employers, tools, numbers and results are real. Never copy its wording or phrasing. CVs and notes are often written in stiff, polished, AI-style language ("spearheaded", "leveraged", "passionate about", "drove cross-functional synergy"), and the user has to sound like themselves talking. Re-say every fact in plain spoken words, the way they'd tell a friend. Prefer these real facts over generic knowledge, and never invent details, projects, or experience beyond what's given there or stated in the transcript.`;
 
 // What every suggest/ask request carries -- see buildConversationText().
 const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You" = the user, "Them" = the other side, oldest first; it is auto-transcribed, so expect small errors), the answers already suggested earlier in this session, and -- at the very end, under "LATEST" -- the last few lines and the question to answer now. Answer the latest question. Use the earlier conversation for continuity: "expand on that" or "going back to earlier" refer to what was said or answered before. Don't repeat an earlier answer word for word; build on it.`;
 
-// Suggested answers are read off the overlay and SAID out loud.
-const SPEECH_STYLE = `\nHow to write it -- the user will say this out loud, glancing at it mid-conversation:
-- Start with ONE short headline sentence that directly answers the question, in the user's own voice, on its own line, followed by a blank line.
-- Then 1-3 short spoken sentences in the first person ("I ..."): plain everyday words, natural rhythm, nothing the user would stumble over saying. No filler ("Great question"), no menu of options.
+// Words and patterns that make an answer sound machine-written when said
+// out loud. humanize.js also strips em dashes and stock openers afterwards,
+// as a safety net.
+const BANNED_TELLS = `Never use these AI tells: "Great question", "Certainly", "Absolutely", "I'd be happy to", "leverage", "delve", "utilize", "passionate about", "spearheaded", "synergy", "robust", "seamless", "cutting-edge", "game-changer", "it's worth noting", "in summary", "in conclusion", "overall", "Not only X but also Y" constructions, and neat lists of three adjectives ("fast, scalable and reliable"). Never use em dashes (—): use a comma or a full stop, or start a new sentence.`;
+
+const HUMAN_VOICE = `\nSound like a real person talking, not like an AI or a cover letter:
+- Use contractions (I'm, I've, it's, didn't, that's) and plain everyday words: "use", not "utilize"; "helped build", not "spearheaded".
+- Keep sentences short and vary their length. A four-word sentence is fine. Talk in the first person ("I", or "we" for a team).
+- Concrete beats polished: name the actual project, tool, number or result instead of a general claim about yourself.
+- Now and then (not in every answer) it's fine to open the way people really do: "So,", "Yeah, so", "Honestly,". Most answers should just start with the point.
+- ${BANNED_TELLS}
+
+Examples of the difference. They show TONE only: never reuse their facts.
+BEFORE (stiff AI): "Great question! I'm passionate about building robust, scalable, and seamless systems, and I spearheaded a migration that leveraged microservices."
+AFTER (spoken): "So, the one I'm proudest of is moving our payments code off the old monolith.
+I split it into three services over about two months.
+Deploys went from once a week to most days, and the Friday pages stopped."
+
+BEFORE (stiff AI): "Certainly. In my previous role, I utilized Python to streamline data workflows — resulting in significant efficiency gains."
+AFTER (spoken): "At my last job I wrote the Python scripts that cleaned our sales data every night.
+It used to take someone half a day by hand.
+After that it just ran on its own."
+
+BEFORE (stiff AI): "Overall, my greatest weakness is that I care deeply about delivering high-quality work."
+AFTER (spoken): "Honestly, I used to say yes to too much.
+Last term I had three projects going at once and one of them slipped.
+Now I check my week before I take anything new on."`;
+
+// Answer style (Settings > Answer style; renderer sends answerStyle).
+// SCRIPT: full sentences to read out. CUES: a first line to say, then
+// keyword prompts the user talks around in their own words.
+const ANSWER_STYLES = new Set(['script', 'cues']);
+
+const SCRIPT_STYLE = `\nAnswer style: SCRIPT. The user will say this out loud, glancing at it mid-conversation:
+- Start with ONE short headline sentence that directly answers the question, in the user's own voice, on its own line, followed by a blank line. It should work on its own if that's all they manage to say.
+- Then 1-3 more short spoken sentences, ONE sentence per line (a line break after every sentence). Nothing the user would stumble over saying. No menu of options.
 - When relevant, include a concrete result or outcome (a number, what changed, what it led to). For behavioural "tell me about a time" questions use a compressed STAR shape: the situation in a clause, what I did, and end on the result.
-- Minimal formatting: plain sentences. No headings, no bullet lists, no tables, no LaTeX; at most one **bold** phrase.
-- Never invent projects, employers, numbers or experience that aren't in the transcript or the user's background material -- if a detail is missing, keep it general.`;
+- Minimal formatting: plain sentences. No headings, no bullet lists, no tables, no LaTeX. You may **bold** one or two key words (never whole sentences).
+- Never invent projects, employers, numbers or experience that aren't in the transcript or the user's background material. If a detail is missing, keep it general.`;
 
-const TECHNICAL_STYLE = `\nCoding, maths, probability, puzzles and system design: still open with a one-line spoken summary of the approach (what the user would say first). Then give what's needed to actually solve it: for code, ONE complete, correct code block in the language (and method signature) shown on screen if there is one -- nothing left out; for maths/probability, the key steps and the final answer; for design, the core components and the main trade-off in a few short sentences. End with one line on time/space complexity where it applies. Keep the prose around it short and spoken.`;
+const CUES_STYLE = `\nAnswer style: CUES. The user wants prompts to talk around in their own words, not a script to read:
+- Line 1: ONE short headline sentence they can say straight away, directly answering the question, in their own voice. Then a blank line.
+- Then 3-4 cue lines. Each starts with "- " and a **bold keyword or short phrase** (2-4 words), optionally followed by a few plain words of detail (a number, a name, a result). Fragments only: no full sentences, no explanations, no filler.
+- Put the cues in the order the user should talk through them. For behavioural "tell me about a time" questions follow STAR (situation, what I did, result) and make the last cue the concrete result.
+- No headings, no tables, no LaTeX, and nothing after the cues.
+- Never invent projects, employers, numbers or experience that aren't in the transcript or the user's background material. If a detail is missing, keep the cue general.
+Example of the format (facts made up, never reuse them):
+"I'd start with the payments migration I did last summer.
 
-const COMMON_NOTES = `${SPEECH_STYLE}${TECHNICAL_STYLE}${CONTEXT_NOTE}${SCREEN_NOTE}${KNOWLEDGE_NOTE}`;
+- **Old monolith** slow weekly deploys
+- **Split into 3 services** over two months
+- **Result** deploys most days, no more Friday pages"`;
 
-const MODE_PROMPTS = {
-  interview: `You are a live interview co-pilot. The user is in a real interview right now and will speak your answer aloud. Ground answers in the user's real background if it appears in the transcript or context.${COMMON_NOTES}`,
-  meeting: `You are a live meeting co-pilot. Suggest what the user could say right now: the headline is their contribution in one sentence (an answer, a position, or a useful question), followed by a sentence or two of support. Only go longer if the moment clearly calls for it (e.g. drafting text, or working through a problem shown on screen) -- then give the complete thing.${COMMON_NOTES}`,
-  presentation: `You are a live presentation co-pilot helping the user answer audience questions or stay on track. Give a short, confident talking-point answer to the most recent question.${COMMON_NOTES}`,
-  general: `You are a live conversation co-pilot. Suggest a short, useful response to whatever was just said or asked. If the request clearly calls for something longer (e.g. code, a full draft), give the complete thing rather than a truncated version.${COMMON_NOTES}`,
+const TECHNICAL_STYLE = `\nCoding, maths, probability, puzzles and system design (in either answer style): still open with a one-line spoken summary of the approach (what the user would say first). Then give what's needed to actually solve it: for code, ONE complete, correct code block in the language (and method signature) shown on screen if there is one, nothing left out; for maths/probability, the key steps and the final answer; for design, the core components and the main trade-off in a few short lines. End with one line on time/space complexity where it applies. Keep the words around it short and spoken.`;
+
+function normalizeAnswerStyle(style) {
+  return typeof style === 'string' && ANSWER_STYLES.has(style) ? style : 'script';
+}
+
+function commonNotes(answerStyle) {
+  const style = normalizeAnswerStyle(answerStyle) === 'cues' ? CUES_STYLE : SCRIPT_STYLE;
+  return `${HUMAN_VOICE}${style}${TECHNICAL_STYLE}${CONTEXT_NOTE}${SCREEN_NOTE}${KNOWLEDGE_NOTE}`;
+}
+
+const MODE_INTROS = {
+  interview: `You are a live interview co-pilot. The user is in a real interview right now and will answer in their own voice, using what you write. Ground answers in the user's real background if it appears in the transcript or context.`,
+  meeting: `You are a live meeting co-pilot. Suggest what the user could say right now: the headline is their contribution in one sentence (an answer, a position, or a useful question), with a little support after it. Only go longer if the moment clearly calls for it (e.g. drafting text, or working through a problem shown on screen), and then give the complete thing.`,
+  presentation: `You are a live presentation co-pilot helping the user answer audience questions or stay on track. Give a short, confident talking-point answer to the most recent question.`,
+  general: `You are a live conversation co-pilot. Suggest a short, useful response to whatever was just said or asked. If the request clearly calls for something longer (e.g. code, a full draft), give the complete thing rather than a truncated version.`,
 };
 
-const ASK_SYSTEM_PROMPT = `You are a live conversation co-pilot's chat panel. The user is asking you a quick question about their current live conversation. Answer directly and completely using the transcript, the user's own background material, and any attached screenshots (whichever are present) for context — if the answer calls for code or a full explanation, give the complete version rather than a truncated one. You get the whole conversation so far (oldest first), the answers already given in this session, and the user's question at the end under "LATEST" -- use the earlier context for follow-ups ("what did they mean earlier?", "expand on your last answer").`;
+const ASK_SYSTEM_PROMPT = `You are a live conversation co-pilot's chat panel. The user is asking you a quick question about their current live conversation. Answer directly and completely using the transcript, the user's own background material, and any attached screenshots (whichever are present) for context. If the answer calls for code or a full explanation, give the complete version rather than a truncated one. You get the whole conversation so far (oldest first), the answers already given in this session, and the user's question at the end under "LATEST". Use the earlier context for follow-ups ("what did they mean earlier?", "expand on your last answer").
+Write the way a sharp friend would reply: plain words, contractions, short sentences, straight to the point, no preamble. If you suggest something for the user to say, write it the way they'd actually say it out loud, in the first person.
+${BANNED_TELLS}
+If background files from the user (CV/notes) are included, use them only for facts and never copy their wording.`;
 
-const SUMMARY_SYSTEM_PROMPT = `You are summarizing a transcript of a live conversation (a meeting, interview, or call) between "You" (the user) and "Them" (whoever else was on the call — could be one person or several, all merged into "Them" since the app can't tell voices on that side apart). The transcript is auto-transcribed and may contain errors, filler words, or gaps — do your best with what's there and don't invent content that isn't supported by it. Only report decisions, action items, and unresolved questions that are actually grounded in the transcript. If a category is empty, return an empty array for it rather than making something up.`;
+const SUMMARY_SYSTEM_PROMPT = `You are summarizing a transcript of a live conversation (a meeting, interview, or call) between "You" (the user) and "Them" (whoever else was on the call: could be one person or several, all merged into "Them" since the app can't tell voices on that side apart). The transcript is auto-transcribed and may contain errors, filler words, or gaps. Do your best with what's there and don't invent content that isn't supported by it. Only report decisions, action items, and unresolved questions that are actually grounded in the transcript. If a category is empty, return an empty array for it rather than making something up.`;
 
 const SUMMARY_SCHEMA = {
   type: 'OBJECT',
@@ -305,9 +364,10 @@ const SUMMARY_SCHEMA = {
   required: ['summary', 'decisions', 'actionItems', 'unresolved'],
 };
 
-function buildSystemPrompt(mode) {
+function buildSystemPrompt(mode, answerStyle) {
   // hasOwn: don't let e.g. "__proto__" resolve to an inherited property.
-  return Object.prototype.hasOwnProperty.call(MODE_PROMPTS, mode) ? MODE_PROMPTS[mode] : MODE_PROMPTS.general;
+  const intro = Object.prototype.hasOwnProperty.call(MODE_INTROS, mode) ? MODE_INTROS[mode] : MODE_INTROS.general;
+  return `${intro}${commonNotes(answerStyle)}`;
 }
 
 // ---- Conversation context (whole session, not a recent window) ----
@@ -434,10 +494,11 @@ function buildUserParts(userText, images) {
 // 400s on both together. Older (2.x) models use a different knob, so for
 // those nothing is sent and the model keeps its default.
 //
-// Auto policy (Settings > Quality vs speed = Auto):
-//   interview -> medium, or high when the latest question looks like
-//                coding / maths / probability / a puzzle / system design,
-//                or screenshots are attached (usually a problem on screen)
+// Auto policy (Settings > Quality vs speed = Auto) -- speed first:
+//   interview -> low for normal / behavioural questions; high only when the
+//                latest question looks like coding / maths / probability /
+//                a puzzle / system design, or screenshots are attached
+//                (usually a problem on screen)
 //   meeting / presentation / general -> low
 // Fast = always low, Max = always high.
 const THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high']);
@@ -472,7 +533,7 @@ function resolveThinkingLevel({ mode, quality, question, hasImages } = {}) {
   const q = normalizeQuality(quality);
   if (q === 'fast') return 'low';
   if (q === 'max') return 'high';
-  if (mode === 'interview') return hasImages || looksTechnical(question) ? 'high' : 'medium';
+  if (mode === 'interview') return hasImages || looksTechnical(question) ? 'high' : 'low';
   return 'low';
 }
 
@@ -741,13 +802,28 @@ function withCutOffNote({ text, finishReason }) {
   // MAX_TOKENS = Gemini cut the answer short -- flag it rather than silently
   // returning a truncated solution.
   if (finishReason === 'MAX_TOKENS') {
-    return `${text}\n\n[cut off — hit the output length limit; click Regenerate, or try a smaller/more specific question]`;
+    return `${text}\n\n[cut off: hit the output length limit; click Regenerate, or try a smaller/more specific question]`;
   }
   return text;
 }
 
+// Streams through the humanize.js safety net: what the renderer sees while
+// streaming is always a prefix of the final (humanized) answer.
+function humanizedChunks(onChunk) {
+  if (typeof onChunk !== 'function') return undefined;
+  const filter = createStreamHumanizer();
+  return (delta) => {
+    const out = filter.push(delta);
+    if (out) onChunk(out);
+  };
+}
+
+function humanizeResult(result) {
+  return { ...result, text: humanizeAnswer(result.text) };
+}
+
 async function generateSuggestion({
-  transcript, mode, instruction, question, previousAnswers, images, knowledgeSnippets, quality, signal, onChunk,
+  transcript, mode, instruction, question, previousAnswers, images, knowledgeSnippets, quality, answerStyle, signal, onChunk,
 }) {
   const named = String(question || '').trim();
   const latest = named || latestUtterance(transcript);
@@ -758,19 +834,24 @@ async function generateSuggestion({
 
   const userText = buildConversationText({ transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images });
   const result = await callGemini({
-    systemPrompt: buildSystemPrompt(mode),
+    systemPrompt: buildSystemPrompt(mode, answerStyle),
     parts: buildUserParts(userText, images),
     generationConfig: { temperature: 0.4 },
     thinkingLevel,
     answerTokens,
     signal,
     timeoutMs: AI_TIMEOUT_MS,
-    onChunk,
+    onChunk: humanizedChunks(onChunk),
   });
   const groundingFiles = Array.isArray(knowledgeSnippets)
     ? [...new Set(knowledgeSnippets.map((s) => s.source).filter(Boolean))]
     : [];
-  return { text: withCutOffNote(result), groundingFiles, thinkingLevel };
+  return {
+    text: withCutOffNote(humanizeResult(result)),
+    groundingFiles,
+    thinkingLevel,
+    answerStyle: normalizeAnswerStyle(answerStyle),
+  };
 }
 
 async function askFollowUp({
@@ -788,9 +869,9 @@ async function askFollowUp({
     answerTokens: technical ? ANSWER_TOKENS.chatTechnical : ANSWER_TOKENS.chat,
     signal,
     timeoutMs: AI_TIMEOUT_MS,
-    onChunk,
+    onChunk: humanizedChunks(onChunk),
   });
-  return withCutOffNote(result);
+  return withCutOffNote(humanizeResult(result));
 }
 
 async function summarizeSession({ transcript }) {
@@ -876,6 +957,9 @@ module.exports = {
   geminiModel,
   // Pure helpers, exported for main.js validation and the unit tests.
   QUALITY_SETTINGS,
+  ANSWER_STYLES,
+  normalizeAnswerStyle,
+  buildSystemPrompt,
   MAX_PROMPT_TRANSCRIPT_CHARS,
   TRANSCRIPT_TRIMMED_MARKER,
   capTranscript,

@@ -279,6 +279,11 @@ function createOverlayWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // The renderer's voice-activity detection samples audio levels every
+      // ~40 ms; Chromium would otherwise throttle that to ~1/s (and worse
+      // after a few minutes) whenever the overlay is hidden, which delays
+      // chunk cuts while you keep talking with Echo hidden.
+      backgroundThrottling: false,
     },
   });
 
@@ -578,7 +583,7 @@ function handle(channel, fn) {
 // Every handler validates its payload (defence in depth): a malformed or
 // oversized payload fails with a clear error instead of deep inside fetch.
 
-const MAX_BASE64_AUDIO_CHARS = 8 * 1024 * 1024; // ~6MB of raw audio, generous for a 6s chunk
+const MAX_BASE64_AUDIO_CHARS = 8 * 1024 * 1024; // ~6MB of raw audio, generous for a <=12 s opus chunk
 const MAX_BASE64_IMAGE_CHARS = 20 * 1024 * 1024; // ~15MB raw, generous for a full-res screenshot
 const MAX_TEXT_CHARS = 200_000; // question/instruction/clipboard sanity cap
 // The WHOLE session transcript goes over IPC (summaries use all of it; ai.js
@@ -683,7 +688,8 @@ handle('desktop:get-audio-source', async () => {
   return sources[0].id;
 });
 
-// One ~6 s audio chunk -> Groq Whisper, with the user's own key (ai.js).
+// One audio chunk (an utterance cut at a pause by the renderer's VAD, at
+// most ~12 s) -> Groq Whisper, with the user's own key (ai.js).
 handle('stt:transcribe', async (_evt, { base64, mimeType, speaker } = {}) => {
   if (base64 !== undefined && (typeof base64 !== 'string' || base64.length > MAX_BASE64_AUDIO_CHARS)) {
     throw new Error('Invalid or oversized audio chunk.');
@@ -723,6 +729,13 @@ function validateQuality(quality) {
   return quality;
 }
 
+// Settings > Answer style: 'script' (full spoken sentences) or 'cues'.
+function validateAnswerStyle(style) {
+  if (style === undefined || style === null) return 'script';
+  if (typeof style !== 'string' || !ai.ANSWER_STYLES.has(style)) throw new Error('Invalid answer style.');
+  return style;
+}
+
 // [{ kind: 'suggestion'|'chat', question, text }] -- answers already shown
 // this session, so follow-ups ("expand on that") have something to refer to.
 function validatePreviousAnswers(list) {
@@ -743,7 +756,7 @@ function chunkForwarder(evt, requestId) {
   };
 }
 
-handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, images } = {}) => {
+handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images } = {}) => {
   const id = validateRequestId(requestId);
   assertOptionalString(transcript, 'transcript', MAX_TRANSCRIPT_CHARS);
   assertOptionalString(mode, 'mode', 50);
@@ -751,6 +764,7 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
   assertOptionalString(question, 'question', 4000);
   const prior = validatePreviousAnswers(previousAnswers);
   const q = validateQuality(quality);
+  const style = validateAnswerStyle(answerStyle);
   const requestKind = kind === 'auto' ? 'auto' : 'explicit';
   // Privacy Mode: never send screenshots, even if the renderer still had some.
   const preparedImages = privacyModeEnabled ? undefined : prepareImages(images);
@@ -766,6 +780,7 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
       question,
       previousAnswers: prior,
       quality: q,
+      answerStyle: style,
       images: preparedImages,
       knowledgeSnippets,
       // Lets a superseding request actually cancel this HTTP request.

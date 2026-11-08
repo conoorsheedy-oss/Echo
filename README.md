@@ -10,7 +10,16 @@ A small always-on-top desktop overlay that transcribes your calls and suggests w
 
 > **Use it responsibly.** Echo is for interview *practice*, mock interviews and meetings where everyone knows it's running. Many interviews, exams and employers forbid AI help during live assessments, and recording people without consent is illegal in many places. Follow the rules that apply to you. You are responsible for how you use it.
 
-## Quick start
+## Download (Windows)
+
+1. Download `Echo-Setup-x.y.z.exe` from the [Releases page](https://github.com/conoorsheedy-oss/Echo/releases) and run it.
+2. Windows may show **"Windows protected your PC"**. Echo isn't code-signed yet, so click **More info** > **Run anyway**.
+3. Pick an install folder. The installer adds Desktop and Start menu shortcuts; uninstall from Windows Settings > Apps.
+4. On first run Echo opens **Settings**: paste two free keys (Groq and Gemini, see the table below) and click **Save keys**.
+
+The installer is Windows-only for now. macOS and Linux are untested (system-audio capture especially), so run from source there.
+
+## Quick start (from source)
 
 You need [Node.js](https://nodejs.org) **20 or newer**.
 
@@ -32,11 +41,13 @@ You can reopen Settings any time from the `⋯` menu > **API keys**.
 
 ## Using it
 
-- **Start Listening** records your mic and system audio in ~6 s chunks and shows the transcript (`You:` / `Them:`).
-- When they ask a question and pause, an answer appears in **Suggested response**. Press **Generate** (`Ctrl+Enter`) to get one any time, even without listening.
+- **Start Listening** records your mic and system audio and shows the transcript (`You:` / `Them:`). Speech is sent at natural pauses (about 0.7 s after someone stops talking), and silence is never uploaded. The Mic / System audio dots glow while voice is detected.
+- When they finish a question, an answer starts in **Suggested response** within about a second. The first sentence shows in large text straight away, so you can start talking while the rest arrives. Press **Generate** (`Ctrl+Enter`) to get one any time, even without listening.
 - An automatic answer never replaces the one you're reading: a **New answer ready** chip appears instead. Click it when you're ready.
 - Every answer has **Shorten**, **Expand**, **Regenerate** and **Copy**.
 - **Modes** (dropdown next to Start Listening): Interview, Meeting, Presentation, General. Each has its own answer style.
+- **Script / Cues** (chip next to **Suggested response**): **Script** gives full spoken sentences, one per line. **Cues** gives a first line to say, then 3–4 bold keywords to talk around in your own words, which sounds more natural than reading.
+- Answers are written to sound like a person talking: contractions, plain words, no "Great question" or em dashes. Facts from your CV or notes are re-said in plain words, never copied.
 - **Screen context:** pick a screen or window and click **Capture**. Up to **4 screenshots** wait in a tray and go with your next answer or question. `Ctrl+Shift+S` captures and answers in one go.
 - **Knowledge base:** **Add Files** to add your CV or notes (`.txt` / `.md`). Only the snippets that match a question are sent.
 - **Ask the assistant:** a chat box for follow-up questions about the conversation.
@@ -84,10 +95,11 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 ## Settings
 
 - **Quality vs speed** (Settings > Answers) sets how hard Gemini thinks before answering:
-  - **Auto** (default): Interview mode thinks harder (`high`) on coding, maths, probability, puzzle and system-design questions, or when screenshots are attached, and uses `medium` otherwise. Meeting, Presentation and General use `low`.
+  - **Auto** (default): `high` for coding, maths, probability, puzzle and system-design questions in Interview mode, or when screenshots are attached. Everything else uses `low` for speed.
   - **Fast**: always `low`, quickest answers.
   - **Max**: always `high`, best quality but slower.
-- **Models**: copy `.env.example` to `.env` to override them, then restart Echo:
+- **Answer style** (Settings > Answers, or the chip): **Script** (default) or **Cues**.
+- **Models** (when running from source): copy `.env.example` to `.env` to override them, then restart Echo:
   - `GEMINI_MODEL` (default `gemini-3.5-flash`). Google retires older Flash models, so if answers say the model is unknown, set a current Gemini Flash id from Google AI Studio.
   - `GROQ_STT_MODEL` (default `whisper-large-v3-turbo`).
 - `.env` can also hold `GROQ_API_KEY` / `GEMINI_API_KEY` as a developer fallback. Keys saved in the app take priority.
@@ -118,7 +130,27 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 | Blank or frozen window | Check the terminal you ran `npm start` from for `[renderer ...]` error lines. `Ctrl+Shift+Space` or the tray's **Reset window position** brings a lost window back. |
 | "doesn't know the model" | Set `GEMINI_MODEL` in `.env` to a current Gemini Flash model and restart. |
 
-`Ctrl+Shift+D` opens a diagnostics panel with recent request timings and errors (it never shows keys).
+`Ctrl+Shift+D` opens a diagnostics panel with recent request timings, errors and the "Speech end → first answer word" latency (last value and average). It never shows keys.
+
+## Building the installer
+
+For maintainers. On Windows, with Node.js 20+:
+
+```bash
+npm install
+npm run dist
+```
+
+This writes `dist/Echo-Setup-<version>.exe` (NSIS, x64). `npm run dist` first re-checks the hand-gesture files and stops if any are missing (fix: `npm run gestures:fetch`). `npm run pack` builds just the unpacked app in `dist/` for a quick test.
+
+To publish a release, set `version` in `package.json`, commit, and push a matching tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+GitHub Actions (`.github/workflows/release.yml`) then builds the installer on Windows and attaches it to the release for that tag. CI (`ci.yml`) runs the tests on Windows and Ubuntu for every push and pull request to `main`.
 
 ## Project structure
 
@@ -139,6 +171,7 @@ scripts/         fetch-gesture-assets.js (runs on npm install)
 test/            npm test
 docs/            ARCHITECTURE.md
 assets/          tray icons
+build/           installer icon (electron-builder)
 ```
 
 How the pieces fit together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

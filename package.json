@@ -29,14 +29,67 @@
   },
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/gesture-core.test.js test/ai-answers.test.js",
+    "test": "node --test test/gesture-core.test.js test/ai-answers.test.js test/vad-core.test.js",
     "gestures:fetch": "node scripts/fetch-gesture-assets.js",
-    "postinstall": "node scripts/fetch-gesture-assets.js"
+    "postinstall": "node scripts/fetch-gesture-assets.js",
+    "predist": "node scripts/fetch-gesture-assets.js --strict",
+    "dist": "electron-builder --win --x64",
+    "pack": "electron-builder --dir"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "0.10.35"
   },
   "devDependencies": {
-    "electron": "^31.7.7"
+    "electron": "^31.7.7",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "io.github.conoorsheedy-oss.echo",
+    "productName": "Echo",
+    "copyright": "Copyright (c) 2026 conoorsheedy-oss",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
+      "!**/.env",
+      "!**/.env.*",
+      "!test/**",
+      "!scripts/**",
+      "!docs/**",
+      "!build/**",
+      "!dist/**",
+      "!node_modules/@mediapipe/**"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "publish": null,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Echo",
+      "uninstallDisplayName": "Echo",
+      "artifactName": "Echo-Setup-${version}.${ext}",
+      "deleteAppDataOnUninstall": false
+    }
   }
 }

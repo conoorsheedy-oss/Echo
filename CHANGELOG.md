@@ -12,3 +12,5 @@ First open-source, bring-your-own-keys release.
 - Compact bar, Focus mode, Privacy Mode, hide from screen share (opt-in), click-through, diagnostics panel and global shortcuts.
 - Experimental webcam hand gestures (off by default, processed locally with MediaPipe).
 - API keys encrypted with the OS keychain via Electron `safeStorage`; no Echo server, no login, no credits.
+- Windows installer (`Echo-Setup-<version>.exe`, NSIS x64) built with electron-builder via `npm run dist`; not code-signed yet.
+- GitHub Actions: CI runs a syntax check and `npm test` on Windows and Ubuntu; pushing a `v*` tag builds the installer and attaches it to a GitHub Release.

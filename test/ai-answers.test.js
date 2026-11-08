@@ -106,7 +106,9 @@ test('suggestions stream from :streamGenerateContent?alt=sse and forward chunks 
   assert.match(calls[0].url, /\/models\/[^/:]+:streamGenerateContent\?alt=sse$/);
   assert.equal(calls[0].init.headers['x-goog-api-key'], 'test-gemini-key');
   assert.ok(!calls[0].url.includes('test-gemini-key'), 'key never goes in the URL');
-  assert.deepEqual(chunks, ['I led the ', 'migration', ' and cut costs 30%.']);
+  // Streamed through the humanize.js filter: trailing whitespace is held
+  // back until the next piece arrives, so piece boundaries shift slightly.
+  assert.deepEqual(chunks, ['I led the', ' migration', ' and cut costs 30%.']);
   assert.equal(result.text, 'I led the migration and cut costs 30%.');
   assert.equal(result.thinkingLevel, 'low');
 
@@ -226,8 +228,10 @@ test('request registry: explicit supersedes all suggestions, auto only older aut
 // ---- Thinking level policy ----
 test('thinking level: Auto by mode + question, Fast = low, Max = high', () => {
   const lvl = (mode, question, extra = {}) => ai.resolveThinkingLevel({ mode, question, quality: 'auto', ...extra });
-  assert.equal(lvl('interview', 'Tell me about yourself.'), 'medium');
-  assert.equal(lvl('interview', 'Why do you want to work here?'), 'medium');
+  // Speed first: normal / behavioural interview questions think LOW.
+  assert.equal(lvl('interview', 'Tell me about yourself.'), 'low');
+  assert.equal(lvl('interview', 'Why do you want to work here?'), 'low');
+  assert.equal(lvl('interview', 'Tell me about a time you disagreed with your manager.'), 'low');
   assert.equal(lvl('interview', 'Can you reverse a linked list in place?'), 'high');
   assert.equal(lvl('interview', 'What is the time complexity of your approach?'), 'high');
   assert.equal(lvl('interview', 'What is the probability of rolling two sixes with two dice?'), 'high');
@@ -243,7 +247,7 @@ test('thinking level: Auto by mode + question, Fast = low, Max = high', () => {
     'What was your biggest challenge in that job from 2020 - 2023?',
     'Why are you job searching right now?',
   ]) {
-    assert.equal(lvl('interview', q), 'medium', q);
+    assert.equal(lvl('interview', q), 'low', q);
   }
   assert.equal(lvl('meeting', 'Can you reverse a linked list?'), 'low');
   assert.equal(lvl('presentation', 'Any questions?'), 'low');
@@ -251,7 +255,28 @@ test('thinking level: Auto by mode + question, Fast = low, Max = high', () => {
   assert.equal(lvl('mystery-mode', 'What do you think?'), 'low');
   assert.equal(ai.resolveThinkingLevel({ mode: 'interview', question: 'Implement LRU cache', quality: 'fast' }), 'low');
   assert.equal(ai.resolveThinkingLevel({ mode: 'general', question: 'hi', quality: 'max' }), 'high');
-  assert.equal(ai.resolveThinkingLevel({ mode: 'interview', question: 'hi', quality: 'bogus' }), 'medium');
+  assert.equal(ai.resolveThinkingLevel({ mode: 'interview', question: 'hi', quality: 'bogus' }), 'low');
+  assert.equal(ai.resolveThinkingLevel({ mode: 'interview', question: 'Tell me about yourself', quality: 'max' }), 'high');
+  assert.equal(ai.resolveThinkingLevel({ mode: 'meeting', question: 'Reverse a linked list', hasImages: true, quality: 'auto' }), 'low');
+  for (const level of ['minimal', 'medium']) {
+    // Auto never picks these any more.
+    for (const mode of ['interview', 'meeting', 'presentation', 'general']) {
+      for (const question of ['Tell me about yourself', 'Implement LRU cache']) {
+        assert.notEqual(lvl(mode, question), level);
+      }
+    }
+  }
+});
+
+test('behavioural interview question: low thinking is sent', async () => {
+  const calls = mockFetch((call) => sseResponse([textEvent('I led it.', 'STOP')], { signal: call.init.signal }));
+  const result = await ai.generateSuggestion({
+    transcript: 'Them: Tell me about a time you led a project.',
+    mode: 'interview',
+    onChunk: () => {},
+  });
+  assert.equal(result.thinkingLevel, 'low');
+  assert.equal(calls[0].body.generationConfig.thinkingConfig.thinkingLevel, 'low');
 });
 
 test('interview coding question: high thinking + a bigger output budget is sent', async () => {
@@ -363,4 +388,124 @@ test('suggest system prompt asks for spoken, headline-first answers', async () =
   assert.match(system, /ONE short headline sentence/);
   assert.match(system, /STAR/);
   assert.match(system, /No headings, no bullet lists/);
+  assert.match(system, /ONE sentence per line/);
+  assert.match(system, /Answer style: SCRIPT/);
+});
+
+test('system prompt: natural voice, banned AI tells, few-shot examples, CV facts only', () => {
+  for (const mode of ['interview', 'meeting', 'presentation', 'general']) {
+    const system = ai.buildSystemPrompt(mode, 'script');
+    assert.match(system, /contractions/i);
+    for (const tell of ['Great question', 'Certainly', 'Absolutely', "I'd be happy to", 'leverage', 'delve', 'utilize',
+      'passionate about', 'spearheaded', 'synergy', 'robust', 'seamless', 'in summary', 'in conclusion', 'overall', 'Not only X']) {
+      assert.ok(system.includes(tell), `${mode}: bans "${tell}"`);
+    }
+    assert.match(system, /em dash/i);
+    assert.equal((system.match(/BEFORE \(stiff AI\)/g) || []).length, 3, 'three BEFORE/AFTER pairs');
+    assert.equal((system.match(/AFTER \(spoken\)/g) || []).length, 3);
+    assert.match(system, /ONLY as a source of facts/);
+    assert.match(system, /Never copy its wording/);
+  }
+});
+
+test('answer style: Cues gets its own prompt variant; unknown styles fall back to Script', async () => {
+  const cues = ai.buildSystemPrompt('interview', 'cues');
+  assert.match(cues, /Answer style: CUES/);
+  assert.match(cues, /3-4 cue lines/);
+  assert.match(cues, /Fragments only/);
+  assert.ok(!cues.includes('Answer style: SCRIPT'));
+  assert.ok(cues.includes('ONE short headline sentence'), 'cues still start with a big first line');
+  assert.equal(ai.buildSystemPrompt('interview', 'bogus'), ai.buildSystemPrompt('interview', 'script'));
+  assert.equal(ai.buildSystemPrompt('interview'), ai.buildSystemPrompt('interview', 'script'));
+  assert.equal(ai.normalizeAnswerStyle('cues'), 'cues');
+  assert.equal(ai.normalizeAnswerStyle('__proto__'), 'script');
+  assert.ok(ai.ANSWER_STYLES.has('script') && ai.ANSWER_STYLES.has('cues') && ai.ANSWER_STYLES.size === 2);
+
+  const calls = mockFetch((call) => sseResponse([textEvent('Ok.', 'STOP')], { signal: call.init.signal }));
+  const result = await ai.generateSuggestion({ transcript: 'Them: hi?', mode: 'interview', answerStyle: 'cues', onChunk: () => {} });
+  assert.match(calls[0].body.systemInstruction.parts[0].text, /Answer style: CUES/);
+  assert.equal(result.answerStyle, 'cues');
+});
+
+test('ask (chat) prompt also bans the AI tells and treats CV files as facts only', async () => {
+  const calls = mockFetch((call) => sseResponse([textEvent('Ok.', 'STOP')], { signal: call.init.signal }));
+  await ai.askFollowUp({ transcript: 'Them: hi?', question: 'what should I say?', mode: 'interview', onChunk: () => {} });
+  const system = calls[0].body.systemInstruction.parts[0].text;
+  assert.match(system, /spearheaded/);
+  assert.match(system, /em dash/i);
+  assert.match(system, /only for facts/);
+});
+
+// ---- humanize.js safety net ----
+const { humanizeAnswer, createStreamHumanizer } = require('../src/main/humanize');
+
+test('humanize: em dashes become commas (or vanish next to punctuation / line edges), code untouched', () => {
+  assert.equal(humanizeAnswer('I led the migration — and it cut costs 30%.'), 'I led the migration, and it cut costs 30%.');
+  assert.equal(humanizeAnswer('So the thing is—we shipped it.'), 'So the thing is, we shipped it.');
+  assert.equal(humanizeAnswer('It was fast — really fast — and cheap.'), 'It was fast, really fast, and cheap.');
+  assert.equal(humanizeAnswer('I did it — .'), 'I did it.');
+  assert.equal(humanizeAnswer('Done. — Then we moved on.'), 'Done. Then we moved on.');
+  assert.equal(humanizeAnswer('— leading\nline end —\nnext'), 'leading\nline end\nnext');
+  assert.equal(humanizeAnswer('this – that'), 'this, that');
+  assert.equal(humanizeAnswer('scores of 2 – 3 and 2–3 and 1999–2003'), 'scores of 2 – 3 and 2–3 and 1999–2003');
+  const code = 'Like this:\n```js\nconst s = "a — b";\n```\nThat — works.';
+  assert.equal(humanizeAnswer(code), 'Like this:\n```js\nconst s = "a — b";\n```\nThat, works.');
+});
+
+test('humanize: a stock opener at the start is stripped and the next word capitalised', () => {
+  assert.equal(humanizeAnswer('Great question! I led the team.'), 'I led the team.');
+  assert.equal(humanizeAnswer('Certainly. so the plan was simple.'), 'So the plan was simple.');
+  assert.equal(humanizeAnswer('Absolutely, I think so.'), 'I think so.');
+  assert.equal(humanizeAnswer("That's a great question — honestly, it depends."), 'Honestly, it depends.');
+  assert.equal(humanizeAnswer('I\u2019d be happy to help! Here it is.'), 'Here it is.');
+  assert.equal(humanizeAnswer('Great question! Certainly, yes.'), 'Yes.');
+  // Not openers: used inside a real sentence, or not at the start.
+  assert.equal(humanizeAnswer('Absolutely no idea, to be honest.'), 'Absolutely no idea, to be honest.');
+  assert.equal(humanizeAnswer('Of course.js is not a thing.'), 'Of course.js is not a thing.');
+  assert.equal(humanizeAnswer('Yeah, so. Great question!'), 'Yeah, so. Great question!');
+  assert.equal(humanizeAnswer('Great question'), 'Great question', 'nothing left to say: keep it');
+  assert.equal(humanizeAnswer(''), '');
+});
+
+test('humanize stream: every piece is a prefix of the final answer, whatever the chunking', () => {
+  const samples = [
+    'Great question! I led the migration — and it cut costs 30%. Then — well — it worked.\n\nNext line.',
+    'Certainly — so the code is:\n```py\nx = "a — b"\n```\nDone — mostly.',
+    'I built it in Go.  It handles 2 – 3k requests a second.',
+    'Absolutely no worries.',
+  ];
+  for (const full of samples) {
+    const expected = humanizeAnswer(full.trim());
+    for (let size = 1; size <= 13; size++) {
+      const filter = createStreamHumanizer();
+      let shown = '';
+      for (let i = 0; i < full.length; i += size) {
+        shown += filter.push(full.slice(i, i + size));
+        assert.ok(expected.startsWith(shown), `size ${size}: "${shown}" is a prefix of "${expected}"`);
+      }
+      shown += filter.end();
+      assert.equal(shown, expected, `size ${size}`);
+    }
+  }
+  // The opener is held back until it's decided, then never shown.
+  const f = createStreamHumanizer();
+  assert.equal(f.push('Great'), '');
+  assert.equal(f.push(' question'), '');
+  // "I" alone could still become "I'd be happy to help", so it waits a word.
+  assert.equal(f.push('! I'), '');
+  assert.equal(f.push(' did.'), 'I did.');
+  assert.equal(f.push(' Then'), ' Then');
+});
+
+test('suggestions arrive humanized, both streamed and final', async () => {
+  mockFetch((call) => sseResponse([
+    textEvent('Great question! '),
+    textEvent('I cut our build time — from 20 minutes'),
+    textEvent(' to 6.', 'STOP'),
+  ], { signal: call.init.signal }));
+  const chunks = [];
+  const result = await ai.generateSuggestion({ transcript: 'Them: What are you proud of?', mode: 'interview', onChunk: (t) => chunks.push(t) });
+  assert.equal(result.text, 'I cut our build time, from 20 minutes to 6.');
+  assert.equal(chunks.join(''), result.text);
+  assert.ok(!chunks.join('').includes('Great question'));
 });

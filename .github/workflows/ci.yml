@@ -1,0 +1,42 @@
+# Runs the tests and a syntax check on every push / pull request to main.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      # Skip the optional ~8 MB hand-gesture model the postinstall script
+      # downloads from storage.googleapis.com. That script never fails
+      # `npm ci` anyway; this just keeps CI fast and independent of that server.
+      # (Don't skip Electron's own binary download: the tests require('electron').)
+      ECHO_SKIP_GESTURE_MODEL: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check (node --check on src/, scripts/, test/)
+        run: node .github/scripts/check-syntax.js
+
+      - name: Run tests
+        run: npm test

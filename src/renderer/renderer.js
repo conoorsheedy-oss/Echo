@@ -1,12 +1,17 @@
 // Echo overlay UI. Talks to the main process only through window.assistant
-// (preload.js), wrapped below as `api`. gestures.js loads after this file and
-// uses window.echoGestureBridge (bottom of this file).
+// (preload.js), wrapped below as `api`. vad-core.js loads before this file
+// (window.EchoVadCore); gestures.js loads after it and uses
+// window.echoGestureBridge (bottom of this file).
 
 // ---- State ----
-const CHUNK_MS = 6000; // length of each audio chunk sent for transcription
+// Audio is cut into chunks at pauses (voice-activity detection, see "Audio
+// chunking" below and vad-core.js). CHUNK_MS is only the fallback chunk
+// length when Web Audio isn't available.
+const CHUNK_MS = 6000;
+const VAD_MAX_CHUNK_MS = (window.EchoVadCore && window.EchoVadCore.MAX_CHUNK_MS) || 12000;
 // A "?" anywhere, or a question starter at the start of the chunk or after a
-// pause word/punctuation. Chunks are cut on a timer, so a question often
-// lands mid-chunk ("yeah so, what's your approach here").
+// pause word/punctuation. A chunk can still hold several sentences, so a
+// question often lands mid-chunk ("yeah so, what's your approach here").
 const QUESTION_RE = /\?|(?:^|[.!,;:]\s+|\b(?:and|so|but)\s+)(?:what|why|how|when|where|who|which)(?:'?s)?\b|(?:^|[.!,;:]\s+|\b(?:and|so|but)\s+)(?:can you|could you|would you|do you|did you|have you|are you|is there|tell me|explain|describe)\b/i;
 
 let micStream = null;
@@ -24,24 +29,31 @@ const MAX_SCREENSHOTS = 4;
 let screenshots = [];
 let nextScreenshotId = 1;
 
-// A question that starts near the end of one rolling audio chunk often
-// continues into the next one (audio is cut on a fixed timer, not on
-// sentence boundaries). These track "we saw the start of a question, don't
-// fire yet -- wait for the next chunk from them to actually land so the
-// suggestion answers the whole question, not half of it."
+// A chunk cut mid-speech (the MAX_CHUNK_MS safety cut, or the fixed-chunk
+// fallback) can end half-way through a question that continues in the next
+// chunk. These track "we saw the start of a question, don't fire yet -- wait
+// for the next chunk from them to actually land so the suggestion answers
+// the whole question, not half of it." Chunks cut at a pause don't need this.
 let awaitingNextThemLine = false;
 let pendingQuestionTimer = null;
 
 let listenBusy = false; // a Start/Stop is in flight -- blocks double clicks
 let suggestInFlight = false; // any suggestion request running (header "Thinking" pill)
 
-// Auto-suggest debounce: a detected question only fires once the other side
-// has gone quiet -- no new "Them" transcript for AUTO_SUGGEST_QUIET_MS (any
-// new "Them" line restarts the wait) -- and not again for the same question
-// or for a tiny transcript change (fewer than MIN_NEW_THEM_CHARS new
-// characters from them since the last automatic answer).
+// Auto-suggest debounce: a detected question fires once the other side has
+// stopped talking, and not again for the same question or for a tiny
+// transcript change (fewer than MIN_NEW_THEM_CHARS new characters from them
+// since the last automatic answer). Any new "Them" line restarts the wait.
+//   - A chunk the VAD cut at a pause that ends like a finished sentence
+//     ("?", ".", "!"): the pause itself was the end-of-speech signal, so
+//     fire after just AUTO_SUGGEST_AFTER_SPEECH_MS.
+//   - Anything else (trailing off "...", a mid-speech cut, fixed chunks):
+//     wait AUTO_SUGGEST_QUIET_MS for more.
+const AUTO_SUGGEST_AFTER_SPEECH_MS = 300;
 const AUTO_SUGGEST_QUIET_MS = 1500;
 const MIN_NEW_THEM_CHARS = 12;
+// Two "Them" lines this close together count as one question ("Re: ..." line).
+const QUESTION_JOIN_MS = 10000;
 let autoSuggestTimer = null;
 let lastAutoQuestionKey = '';
 let themCharsTotal = 0;
@@ -413,7 +425,23 @@ compactBtn.addEventListener('click', () => {
 });
 
 // ---- Transcript ----
-function appendLine(speaker, text) {
+// meta (from the recorder): { cut: 'silence' | 'max' | 'timer', speechEndAt }
+//   cut = why the chunk ended; speechEndAt = performance.now() of the last
+//   voiced audio in it (for the latency stat in Diagnostics).
+let lastThemChunk = null; // { speechEndAt, transcribedAt }
+
+// The chunk ended at a pause and reads like a finished sentence.
+function endedAtPause(text, meta) {
+  if (!meta || meta.cut !== 'silence') return false;
+  const t = text.trim();
+  return /[?.!]["')\]]*$/.test(t) && !/(\.\.\.|…)["')\]]*$/.test(t);
+}
+
+function autoSuggestDelay(text, meta) {
+  return endedAtPause(text, meta) ? AUTO_SUGGEST_AFTER_SPEECH_MS : AUTO_SUGGEST_QUIET_MS;
+}
+
+function appendLine(speaker, text, meta = null) {
   if (!text) return;
   transcriptLines.push({ speaker, text, ts: Date.now() });
 
@@ -423,10 +451,16 @@ function appendLine(speaker, text) {
   transcriptEl.appendChild(div);
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
+  const delay = autoSuggestDelay(text, meta);
   if (speaker === 'Them') {
     themCharsTotal += text.length;
+    const now = performance.now();
+    lastThemChunk = {
+      speechEndAt: meta && Number.isFinite(meta.speechEndAt) ? meta.speechEndAt : now,
+      transcribedAt: now,
+    };
     // They're still talking: push a scheduled auto-suggestion back.
-    if (autoSuggestTimer) scheduleAutoSuggest();
+    if (autoSuggestTimer) scheduleAutoSuggest(delay);
   }
 
   // This is the chunk we were waiting for (the rest of a question that
@@ -435,15 +469,15 @@ function appendLine(speaker, text) {
     awaitingNextThemLine = false;
     clearTimeout(pendingQuestionTimer);
     pendingQuestionTimer = null;
-    scheduleAutoSuggest();
+    scheduleAutoSuggest(delay);
     return;
   }
 
   // Auto-suggest when the other side seems to have asked a question.
   if (speaker === 'Them' && QUESTION_RE.test(text.trim())) {
-    if (/\?\s*$/.test(text.trim())) {
-      // Ends with "?": the question finished in this chunk.
-      scheduleAutoSuggest();
+    if (/\?\s*$/.test(text.trim()) || (meta && meta.cut === 'silence')) {
+      // Ends with "?", or they stopped talking: the question is done.
+      scheduleAutoSuggest(delay);
     } else {
       // A question started but may continue in the next chunk: wait for it
       // (with a safety-net timeout) rather than answering half a question.
@@ -454,20 +488,20 @@ function appendLine(speaker, text) {
         awaitingNextThemLine = false;
         pendingQuestionTimer = null;
         autoSuggest(); // already waited well past the quiet window
-      }, CHUNK_MS + 4000); // one full chunk + generous STT round-trip margin
+      }, (meta && meta.cut === 'max' ? VAD_MAX_CHUNK_MS : CHUNK_MS) + 4000); // one full chunk + generous STT margin
     }
   }
 }
 
 // The other side's latest question, for the "Re: ..." line above the answer:
 // their last line, plus the one before it if it was part of the same burst
-// (a question often spans two rolling audio chunks).
+// (a question can span two audio chunks).
 function recentThemQuestion() {
   const them = transcriptLines.filter((l) => l.speaker === 'Them');
   if (!them.length) return null;
   const last = them[them.length - 1];
   const prev = them[them.length - 2];
-  const parts = prev && last.ts - prev.ts <= CHUNK_MS + 4000 ? [prev.text, last.text] : [last.text];
+  const parts = prev && last.ts - prev.ts <= QUESTION_JOIN_MS ? [prev.text, last.text] : [last.text];
   return parts.join(' ');
 }
 
@@ -512,6 +546,7 @@ function clearTranscript() {
   lastAutoQuestionKey = '';
   themCharsTotal = 0;
   themCharsAtLastAuto = 0;
+  lastThemChunk = null;
   answerHistory.length = 0;
   clearPendingAnswer();
 }
@@ -569,7 +604,9 @@ function safeRenderMarkdown(value) {
   }
 }
 
-function renderMarkdown(rawInput) {
+// opts.sentenceLines: each sentence of a paragraph on its own line (Script
+// answers in the suggestion panel).
+function renderMarkdown(rawInput, opts = {}) {
   const raw = toRenderableString(rawInput);
   if (!raw) return '';
   const lines = raw.replace(/\r\n/g, '\n').split('\n');
@@ -644,10 +681,78 @@ function renderMarkdown(rawInput) {
       para.push(lines[i]);
       i++;
     }
-    html += `<p>${renderInline(para.join(' '))}</p>`;
+    const paraText = para.join(' ');
+    html += opts.sentenceLines
+      ? `<p class="sentences">${splitSentences(paraText).map((t) => `<span class="sentence">${renderInline(t)}</span>`).join('')}</p>`
+      : `<p>${renderInline(paraText)}</p>`;
   }
   flushList();
   return html;
+}
+
+// ---- Sentences (big first line + one sentence per line) ----
+// A sentence ends at . ! ? (plus closing quotes/brackets/bold markers)
+// FOLLOWED BY WHITESPACE -- so while an answer streams, "3." isn't an end
+// until we see what comes next ("3.5"), and the split never moves text that
+// is already on screen. Common abbreviations, initials and splits inside
+// **bold** don't count.
+const SENTENCE_END_RE = /[.!?]+["'”’)\]*]*(?=\s)/g;
+const ABBREVIATION_RE = /(?:^|[\s(])(?:e\.g|i\.e|etc|vs|approx|mr|mrs|ms|dr|prof|st|no|fig|inc|ltd|[A-Za-z])\.$/i;
+
+function firstSentenceEnd(text, from = 0) {
+  const re = new RegExp(SENTENCE_END_RE.source, 'g');
+  re.lastIndex = from;
+  let m;
+  while ((m = re.exec(text))) {
+    const end = m.index + m[0].length;
+    const head = text.slice(0, end);
+    const bare = head.replace(/["'”’)\]*]+$/, '');
+    if (bare.endsWith('.') && ABBREVIATION_RE.test(bare)) continue;
+    if ((head.match(/\*\*/g) || []).length % 2 === 1) continue; // inside **bold**
+    return end;
+  }
+  return -1;
+}
+
+function splitSentences(text) {
+  const out = [];
+  let rest = text;
+  for (let guard = 0; guard < 200; guard++) {
+    const end = firstSentenceEnd(rest);
+    if (end === -1) break;
+    const piece = rest.slice(0, end).trim();
+    if (piece) out.push(piece);
+    rest = rest.slice(end);
+  }
+  if (rest.trim()) out.push(rest.trim());
+  return out;
+}
+
+// The suggestion panel: the answer's FIRST SENTENCE is the big headline,
+// shown as soon as it starts streaming so the user can start talking while
+// the rest arrives. It only grows at its end and, once finished, never
+// changes -- the rest goes below it (steady answers: no reflow).
+const NON_PROSE_LINE_RE = /^(?:```|#{1,4}\s|\s*[-*]\s|\s*\d+[.)]\s)/;
+function renderSuggestionHtml(rawInput, style) {
+  const src = toRenderableString(rawInput).replace(/\r\n/g, '\n').replace(/^\s+/, '');
+  if (!src) return '';
+  const opts = { sentenceLines: style !== 'cues' };
+  const nl = src.indexOf('\n');
+  const firstLine = nl === -1 ? src : src.slice(0, nl);
+  if (NON_PROSE_LINE_RE.test(firstLine)) return renderMarkdown(src, opts);
+  const end = firstSentenceEnd(firstLine);
+  const headline = end === -1 ? firstLine : firstLine.slice(0, end);
+  const rest = (end === -1 ? '' : firstLine.slice(end)) + (nl === -1 ? '' : src.slice(nl));
+  return `<p class="headline">${renderInline(headline.trim())}</p>${renderMarkdown(rest.replace(/^[ \t]+/, ''), opts)}`;
+}
+
+function safeRenderSuggestion(value, style) {
+  try {
+    return renderSuggestionHtml(value, style);
+  } catch (err) {
+    console.error('renderSuggestionHtml failed, falling back:', err);
+    return safeRenderMarkdown(value);
+  }
 }
 
 // ---- Knowledge base (personal files searched for grounding context) ----
@@ -836,76 +941,196 @@ async function blobToBase64(blob) {
   return btoa(binary);
 }
 
+// ---- Audio chunking: voice-activity detection (vad-core.js) ----
+// Each stream (mic = "You", system audio = "Them") gets its own
+// AnalyserNode + VadSegmenter, sampled every VAD_FRAME_MS. A MediaRecorder
+// is always running, so the start of an utterance is never lost:
+//   'cut'   (speech, then SILENCE_MS of quiet -- or MAX_CHUNK_MS of non-stop
+//           talking): the next recorder starts FIRST, then the finished one
+//           stops and uploads. One recorder per chunk = every chunk is a
+//           complete, standalone webm file.
+//   'reset' (no speech in the recording): it's thrown away, never uploaded.
+// Without Web Audio (or if the AudioContext never starts) it falls back to
+// fixed CHUNK_MS chunks, the pre-VAD behaviour.
+const Vad = window.EchoVadCore || null;
+const VAD_FRAME_MS = 40;
+const VAD_START_TIMEOUT_MS = 2000; // AudioContext still not running -> fixed chunks
+let audioCtx = null;
+
+function getAudioContext() {
+  if (audioCtx && audioCtx.state !== 'closed') return audioCtx;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  try {
+    audioCtx = new Ctx();
+  } catch (err) {
+    console.warn('No AudioContext -- using fixed-length audio chunks:', err);
+    audioCtx = null;
+  }
+  return audioCtx;
+}
+
+function closeAudioContext() {
+  if (!audioCtx) return;
+  audioCtx.close().catch(() => {});
+  audioCtx = null;
+}
+
 function startRollingRecorder(stream, speaker, indicatorEl) {
   const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus'
     : 'audio/webm';
 
   let stopped = false;
-  let current = null;
-  let cutTimer = null;
+  let current = null; // { recorder, chunks, upload, meta }
+  let vadTimer = null;
+  let fixedTimer = null;
+  let source = null;
+  let mode = 'vad';
   // Results are appended strictly in recording order, even if a later
   // chunk's transcription happens to come back first.
   let appendQueue = Promise.resolve();
 
-  function cycle() {
-    if (stopped) return;
+  function begin() {
     let recorder;
     try {
       recorder = new MediaRecorder(stream, { mimeType });
     } catch (err) {
       console.error(`Could not start recorder (${speaker}):`, err);
-      indicatorEl.classList.remove('active');
-      return;
+      return null;
     }
-    current = recorder;
-    const chunks = [];
-
+    const rec = { recorder, chunks: [], upload: false, meta: null };
     recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) chunks.push(e.data);
+      if (e.data && e.data.size > 0) rec.chunks.push(e.data);
     };
-
-    recorder.onstop = () => {
-      // Stop was pressed: don't upload the tail end.
-      if (stopped) return;
-      // Start the next chunk BEFORE uploading this one, so no audio is lost
-      // during the upload round-trip.
-      cycle();
-      const blob = new Blob(chunks, { type: mimeType });
-      if (!blob.size) return;
-      const pending = transcribeBlob(blob, mimeType, speaker);
-      appendQueue = appendQueue
-        .then(() => pending)
-        .then((text) => { if (text) appendLine(speaker, text); })
-        .catch((err) => console.error('appendLine failed:', err));
-    };
-
+    recorder.onstop = () => finish(rec);
     try {
       recorder.start();
     } catch (err) {
       // e.g. the mic was unplugged and the stream has ended.
       console.error(`Recorder failed to start (${speaker}):`, err);
-      indicatorEl.classList.remove('active');
-      if (speaker === 'You') showToast('Microphone stopped delivering audio -- check it, then Stop / Start Listening.');
-      return;
+      return null;
     }
-    indicatorEl.classList.add('active');
-    cutTimer = setTimeout(() => {
-      if (recorder.state !== 'inactive') recorder.stop();
+    return rec;
+  }
+
+  function finish(rec) {
+    // Discarded (no speech) or Stop was pressed: don't upload.
+    if (!rec.upload) return;
+    const blob = new Blob(rec.chunks, { type: mimeType });
+    if (!blob.size) return;
+    const meta = rec.meta;
+    const pending = transcribeBlob(blob, mimeType, speaker);
+    appendQueue = appendQueue
+      .then(() => pending)
+      .then((text) => { if (text) appendLine(speaker, text, meta); })
+      .catch((err) => console.error('appendLine failed:', err));
+  }
+
+  function dead() {
+    stopTimers();
+    indicatorEl.classList.remove('active', 'speaking');
+    if (speaker === 'You') showToast('Microphone stopped delivering audio -- check it, then Stop / Start Listening.');
+  }
+
+  // Ends the current recording (uploading it or not) and starts the next
+  // one first, so no audio falls between two chunks.
+  function rotate(upload, meta) {
+    if (stopped) return;
+    const prev = current;
+    current = begin();
+    if (prev) {
+      prev.upload = upload;
+      prev.meta = meta;
+      try {
+        if (prev.recorder.state !== 'inactive') prev.recorder.stop();
+      } catch (err) { /* already stopped */ }
+    }
+    if (!current) dead();
+  }
+
+  function stopTimers() {
+    clearInterval(vadTimer);
+    clearInterval(fixedTimer);
+    vadTimer = null;
+    fixedTimer = null;
+  }
+
+  function useFixedChunks(why) {
+    if (stopped) return;
+    if (why) console.warn(`Voice-activity detection unavailable (${speaker}) -- using ${CHUNK_MS / 1000}s chunks:`, why);
+    mode = 'fixed';
+    stopTimers();
+    indicatorEl.classList.remove('speaking');
+    fixedTimer = setInterval(() => {
+      rotate(true, { cut: 'timer', speechEndAt: performance.now() });
     }, CHUNK_MS);
   }
 
-  cycle();
+  current = begin();
+  if (!current) {
+    indicatorEl.classList.remove('active');
+    if (speaker === 'You') showToast('Microphone stopped delivering audio -- check it, then Stop / Start Listening.');
+    return { stop() {}, mode: () => 'off' };
+  }
+  indicatorEl.classList.add('active');
+
+  let analyser = null;
+  const ctx = Vad ? getAudioContext() : null;
+  if (ctx) {
+    try {
+      source = ctx.createMediaStreamSource(stream);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024; // ~21 ms of samples per reading at 48 kHz
+      source.connect(analyser); // never connected to the speakers
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    } catch (err) {
+      analyser = null;
+      useFixedChunks(err);
+    }
+  } else {
+    useFixedChunks(Vad ? 'no AudioContext' : 'vad-core.js not loaded');
+  }
+
+  if (analyser) {
+    const seg = new Vad.VadSegmenter();
+    const samples = new Float32Array(analyser.fftSize);
+    const startedAt = performance.now();
+    vadTimer = setInterval(() => {
+      if (stopped || !current) return;
+      const t = performance.now();
+      if (ctx.state !== 'running') {
+        // Silent zeros from a suspended context would never count as speech.
+        if (t - startedAt > VAD_START_TIMEOUT_MS) useFixedChunks(`AudioContext ${ctx.state}`);
+        return;
+      }
+      analyser.getFloatTimeDomainData(samples);
+      const ev = seg.update({ rms: Vad.rms(samples), t });
+      indicatorEl.classList.toggle('speaking', ev.voiced);
+      if (ev.action === 'cut') {
+        rotate(true, { cut: ev.reason, speechEndAt: ev.speechEndT });
+      } else if (ev.action === 'reset') {
+        rotate(false, null);
+      }
+    }, VAD_FRAME_MS);
+  }
 
   return {
     stop() {
       stopped = true;
-      clearTimeout(cutTimer);
-      try {
-        if (current && current.state !== 'inactive') current.stop();
-      } catch (err) { /* already stopped */ }
-      indicatorEl.classList.remove('active');
+      stopTimers();
+      try { if (source) source.disconnect(); } catch (err) { /* already gone */ }
+      // Stop was pressed: don't upload the chunk in progress. (A chunk that
+      // was already cut at a pause still gets transcribed.)
+      if (current) {
+        current.upload = false;
+        try {
+          if (current.recorder.state !== 'inactive') current.recorder.stop();
+        } catch (err) { /* already stopped */ }
+      }
+      indicatorEl.classList.remove('active', 'speaking');
     },
+    mode: () => mode,
   };
 }
 
@@ -923,7 +1148,7 @@ async function transcribeBlob(blob, mimeType, speaker) {
   } catch (err) {
     if (isKeyError(err)) {
       // The key banner (set by refreshKeyStatus) already says what to do;
-      // stop rather than failing every 6 seconds.
+      // stop rather than failing on every chunk.
       if (listening) {
         stopListening();
         showToast(err.message, 6000);
@@ -1059,9 +1284,10 @@ async function stopListening() {
   systemRecorder = null;
 
   releaseStreams();
+  closeAudioContext();
 
-  micIndicator.classList.remove('active');
-  systemIndicator.classList.remove('active');
+  micIndicator.classList.remove('active', 'speaking');
+  systemIndicator.classList.remove('active', 'speaking');
 }
 
 listenBtn.addEventListener('click', () => {
@@ -1203,20 +1429,15 @@ function showSuggestionError(message) {
   suggestionError.classList.toggle('hidden', !message);
 }
 
-// Short-answer-first: if the answer opens with a short paragraph, style it
-// as a headline so the gist is readable at a glance; detail follows below.
-function markHeadline() {
-  const first = suggestionText.firstElementChild;
-  if (first && first.tagName === 'P' && first.textContent.trim().length <= 260) {
-    first.classList.add('headline');
-  }
-}
-
-function renderAnswerText(text) {
-  if (renderedSource === text) return;
-  renderedSource = text;
-  suggestionText.innerHTML = safeRenderMarkdown(text);
-  markHeadline();
+// Headline-first: the first sentence is rendered big (renderSuggestionHtml);
+// Script answers then show one sentence per line, Cues answers a short list.
+function renderAnswerText(text, style) {
+  const s = style === 'cues' ? 'cues' : 'script';
+  const key = `${s}\u0000${text}`;
+  if (renderedSource === key) return;
+  renderedSource = key;
+  suggestionText.dataset.style = s;
+  suggestionText.innerHTML = safeRenderSuggestion(text, s);
 }
 
 function showGrounding(groundingFiles) {
@@ -1239,7 +1460,7 @@ function displayAnswer(answer, { resetScroll = true, remember = true } = {}) {
   suggestionPlaceholder.classList.add('hidden');
   suggestionText.classList.remove('hidden');
   suggestionActions.classList.remove('hidden');
-  renderAnswerText(answer.text);
+  renderAnswerText(answer.text, answer.style);
   showGrounding(answer.groundingFiles);
   if (resetScroll) suggestionBodyEl.scrollTop = 0;
   if (remember) rememberAnswer('suggestion', answer.question, answer.text);
@@ -1282,7 +1503,7 @@ function renderStreamFrame(req) {
     suggestionBodyEl.scrollTop = 0;
   }
   // Text only ever grows at the end, so what's above doesn't move.
-  renderAnswerText(req.buffer);
+  renderAnswerText(req.buffer, req.answerStyle);
 }
 
 function showPendingAnswer(answer) {
@@ -1339,12 +1560,88 @@ qualitySelect.addEventListener('change', () => {
   try { localStorage.setItem(QUALITY_KEY, currentQuality()); } catch (err) { /* not remembered -- fine */ }
 });
 
+// ---- Answer style (Settings + the chip by "Suggested response") ----
+// 'script': full spoken sentences, one per line. 'cues': a big first line to
+// say, then a few bold keywords to talk around in your own words.
+const ANSWER_STYLE_KEY = 'echo.answerStyle';
+const ANSWER_STYLE_VALUES = ['script', 'cues'];
+const answerStyleSelect = document.getElementById('answer-style-select');
+const answerStyleChip = document.getElementById('answer-style-chip');
+let answerStyle = 'script';
+
+function currentAnswerStyle() {
+  return ANSWER_STYLE_VALUES.includes(answerStyle) ? answerStyle : 'script';
+}
+
+function setAnswerStyle(style, { save = true } = {}) {
+  answerStyle = ANSWER_STYLE_VALUES.includes(style) ? style : 'script';
+  answerStyleSelect.value = answerStyle;
+  const cues = answerStyle === 'cues';
+  answerStyleChip.textContent = cues ? 'Cues' : 'Script';
+  answerStyleChip.classList.toggle('active', cues);
+  answerStyleChip.setAttribute('aria-pressed', cues ? 'true' : 'false');
+  answerStyleChip.title = cues
+    ? 'Answer style: Cues (a first line + keywords to talk around). Click for Script (full sentences). Applies to the next answer.'
+    : 'Answer style: Script (full sentences to say). Click for Cues (a first line + keywords). Applies to the next answer.';
+  if (save) {
+    try { localStorage.setItem(ANSWER_STYLE_KEY, answerStyle); } catch (err) { /* not remembered -- fine */ }
+  }
+}
+try {
+  setAnswerStyle(localStorage.getItem(ANSWER_STYLE_KEY), { save: false });
+} catch (err) {
+  setAnswerStyle('script', { save: false });
+}
+answerStyleSelect.addEventListener('change', () => setAnswerStyle(answerStyleSelect.value));
+answerStyleChip.addEventListener('click', () => {
+  setAnswerStyle(currentAnswerStyle() === 'cues' ? 'script' : 'cues');
+  showToast(currentAnswerStyle() === 'cues'
+    ? 'Answer style: Cues (a first line + keywords). Applies from the next answer.'
+    : 'Answer style: Script (full sentences). Applies from the next answer.', 2500);
+});
+
+// ---- Latency stat (Diagnostics): end of their speech -> first answer word ----
+// Measured from the last voiced audio of the latest "Them" chunk (VAD) to
+// the first streamed token of the suggestion that followed it. Includes the
+// silence wait, upload + transcription, the auto-suggest delay and Gemini's
+// time to first token.
+const LATENCY_SAMPLES = 10;
+const LATENCY_WINDOW_MS = 30_000; // older speech isn't what the answer is responding to
+const latencySamples = []; // { totalMs, sttMs, auto }
+
+function latencyStartFor() {
+  if (!lastThemChunk) return null;
+  if (performance.now() - lastThemChunk.transcribedAt > LATENCY_WINDOW_MS) return null;
+  return { ...lastThemChunk };
+}
+
+function noteFirstToken(req) {
+  if (req.firstTokenAt) return;
+  req.firstTokenAt = performance.now();
+  if (!req.latencyFrom) return;
+  latencySamples.push({
+    totalMs: Math.max(0, Math.round(req.firstTokenAt - req.latencyFrom.speechEndAt)),
+    sttMs: Math.max(0, Math.round(req.latencyFrom.transcribedAt - req.latencyFrom.speechEndAt)),
+    auto: req.auto,
+  });
+  if (latencySamples.length > LATENCY_SAMPLES) latencySamples.shift();
+  if (!diagnosticsOverlay.classList.contains('hidden')) renderDiagnostics();
+}
+
+function describeLatency() {
+  if (!latencySamples.length) return 'no timed answers yet';
+  const last = latencySamples[latencySamples.length - 1];
+  const avg = Math.round(latencySamples.reduce((n, x) => n + x.totalMs, 0) / latencySamples.length);
+  return `last ${last.totalMs} ms (${last.auto ? 'auto' : 'manual'}, of which speech-to-text ${last.sttMs} ms) · avg of last ${latencySamples.length}: ${avg} ms`;
+}
+
 // Streamed text for suggestions and chat answers (see main.js 'ai:chunk').
 const chatRequests = new Map(); // requestId -> chat request state
 api.onAiChunk((payload) => {
   if (!payload || typeof payload.text !== 'string') return;
   const req = suggestRequests.get(payload.requestId) || chatRequests.get(payload.requestId);
   if (!req || req.superseded) return;
+  if (req.kind === 'suggest') noteFirstToken(req);
   req.buffer += payload.text;
   req.onChunk();
 });
@@ -1384,7 +1681,10 @@ async function requestSuggestion(instruction, opts = {}) {
   }
 
   const id = newRequestId('s');
-  const req = { id, auto, questionLine, buffer: '', started: false, frameQueued: false, superseded: false };
+  const req = {
+    id, kind: 'suggest', auto, questionLine, buffer: '', started: false, frameQueued: false, superseded: false,
+    answerStyle: currentAnswerStyle(), latencyFrom: latencyStartFor(), firstTokenAt: null,
+  };
   req.onChunk = () => {
     if (panelOwnerId !== id || req.frameQueued) return; // buffered: nothing on screen changes
     req.frameQueued = true;
@@ -1408,12 +1708,14 @@ async function requestSuggestion(instruction, opts = {}) {
       question: questionLine || undefined,
       previousAnswers: previousAnswersForSend(),
       quality: currentQuality(),
+      answerStyle: req.answerStyle,
       images: shots.images,
     });
     // They reached Gemini -- clear them unless "Keep screenshots" is on
     // (even if a newer request superseded this one's answer).
     screenshotsSent(shots.ids);
     if (req.superseded) return;
+    noteFirstToken(req); // no-op if it streamed; times a non-streamed answer
     // ai:suggest resolves { text, groundingFiles } -- the full answer, which
     // also replaces whatever was streamed (it's authoritative if streaming
     // fell back to a normal request part-way).
@@ -1422,6 +1724,7 @@ async function requestSuggestion(instruction, opts = {}) {
       text: (isObj ? result.text : result) || '(no suggestion returned)',
       question: questionLine,
       groundingFiles: isObj ? result.groundingFiles : undefined,
+      style: (isObj && result.answerStyle) || req.answerStyle,
     };
     if (panelOwnerId === id) displayAnswer(answer, { resetScroll: !req.started });
     else showPendingAnswer(answer);
@@ -1639,6 +1942,16 @@ exportSummaryBtn.addEventListener('click', async () => {
 });
 
 // ---- Diagnostics panel (Ctrl+Shift+D) ----
+function describeChunking() {
+  const modes = [micRecorder, systemRecorder].filter(Boolean).map((r) => r.mode());
+  if (!modes.length) return 'not recording';
+  if (modes.every((m) => m === 'vad')) {
+    const V = window.EchoVadCore;
+    return `cut at pauses (${V.SILENCE_MS} ms quiet, max ${V.MAX_CHUNK_MS / 1000} s)`;
+  }
+  return modes.includes('vad') ? 'mixed: some streams on fixed chunks' : `fixed ${CHUNK_MS / 1000} s chunks (no Web Audio)`;
+}
+
 function renderDiagnostics() {
   const rows = [
     ['Listening', listening ? 'yes' : 'no'],
@@ -1647,10 +1960,13 @@ function renderDiagnostics() {
     ['Models', modelsText || '?'],
     ['Network', aiOffline ? "can't reach Groq/Gemini" : 'ok'],
     ['System audio', systemRecorder ? 'capturing' : 'off'],
+    ['Audio chunks', describeChunking()],
+    ['Speech end → first answer word', describeLatency()],
     ['Privacy mode', privacyModeEnabled ? 'on' : 'off'],
     ['Compact bar', compactMode ? 'on' : 'off'],
     ['Transcript lines', String(transcriptLines.length)],
     ['Answer quality', currentQuality()],
+    ['Answer style', currentAnswerStyle()],
   ];
   diagnosticsStateEl.innerHTML = '';
   for (const [k, v] of rows) {

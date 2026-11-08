@@ -5,6 +5,8 @@
 //
 // Runs automatically after `npm install` (the "postinstall" script) and can be
 // re-run by hand:   npm run gestures:fetch        (add -- --force to redo)
+// `npm run dist` runs it with --strict, which exits 1 if anything is missing,
+// so an installer is never built without the hand-gesture files.
 //
 // Writes into src/renderer/vendor/mediapipe/ (git-ignored; regenerated here):
 //   vision_bundle.mjs                         <- @mediapipe/tasks-vision
@@ -42,6 +44,7 @@ const RUNTIME_FILES = [
 ];
 
 const force = process.argv.includes('--force');
+const strict = process.argv.includes('--strict');
 let problems = 0;
 
 function log(msg) {
@@ -205,10 +208,14 @@ async function main() {
   } else {
     log('all hand-gesture assets are in place.');
   }
+  if (problems && strict) {
+    console.error('[gesture-assets] --strict: refusing to continue without every hand-gesture file (see warnings above).');
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {
   // Never break `npm install` over an optional feature.
   console.warn(`[gesture-assets] WARNING: ${err && err.message ? err.message : err}`);
-  process.exitCode = 0;
+  process.exitCode = strict ? 1 : 0;
 });
