@@ -21,6 +21,9 @@ jobs:
     env:
       # Skip the optional ~8 MB hand-gesture model; tests don't need it.
       ECHO_SKIP_GESTURE_MODEL: '1'
+      # Skip the Electron binary (~100 MB from GitHub's release servers, which
+      # sometimes 504). The tests stub `electron` (test/helpers/electron-stub.js).
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
 
@@ -29,17 +32,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      # Electron's binary is downloaded from GitHub during `npm ci`; caching it
-      # avoids re-downloading (and the occasional 504) on every run.
-      - name: Cache Electron download
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/AppData/Local/electron/Cache
-            ~/.cache/electron
-          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
-      # Retry: GitHub's release-download servers sometimes time out (504).
+      # Retry: the npm registry can occasionally blip too.
       - name: Install dependencies
         shell: bash
         run: |
