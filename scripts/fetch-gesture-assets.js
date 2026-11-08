@@ -151,14 +151,16 @@ function download(url, dest, redirectsLeft = MAX_REDIRECTS) {
 }
 
 function looksLikeModel(file) {
-  // .task files are zip bundles ("PK\x03\x04"); an HTML error page or a
-  // truncated download is what we're guarding against here.
+  // Guard against an HTML/JSON error page or proxy message saved in place of
+  // the model. The real .task file is a binary MediaPipe bundle (~8 MB); its
+  // exact header varies, so only reject things that are clearly text.
   try {
     const fd = fs.openSync(file, 'r');
-    const head = Buffer.alloc(4);
-    fs.readSync(fd, head, 0, 4, 0);
+    const head = Buffer.alloc(64);
+    const n = fs.readSync(fd, head, 0, 64, 0);
     fs.closeSync(fd);
-    return head[0] === 0x50 && head[1] === 0x4b;
+    const text = head.subarray(0, n).toString('latin1').trimStart().toLowerCase();
+    return !(text.startsWith('<') || text.startsWith('{') || text.startsWith('error'));
   } catch {
     return false;
   }

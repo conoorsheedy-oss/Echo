@@ -45,6 +45,7 @@
   },
   "build": {
     "appId": "io.github.conoorsheedy-oss.echo",
+    "electronDist": "node_modules/electron/dist",
     "productName": "Echo",
     "copyright": "Copyright (c) 2026 conoorsheedy-oss",
     "directories": {
