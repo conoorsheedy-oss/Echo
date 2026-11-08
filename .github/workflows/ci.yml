@@ -19,21 +19,36 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     env:
-      # Skip the optional ~8 MB hand-gesture model the postinstall script
-      # downloads from storage.googleapis.com. That script never fails
-      # `npm ci` anyway; this just keeps CI fast and independent of that server.
-      # (Don't skip Electron's own binary download: the tests require('electron').)
+      # Skip the optional ~8 MB hand-gesture model; tests don't need it.
       ECHO_SKIP_GESTURE_MODEL: '1'
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
+      # Electron's binary is downloaded from GitHub during `npm ci`; caching it
+      # avoids re-downloading (and the occasional 504) on every run.
+      - name: Cache Electron download
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      # Retry: GitHub's release-download servers sometimes time out (504).
       - name: Install dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && exit 0
+            echo "npm ci failed (attempt $i), retrying in 20s..."
+            sleep 20
+          done
+          exit 1
 
       - name: Syntax check (node --check on src/, scripts/, test/)
         run: node .github/scripts/check-syntax.js

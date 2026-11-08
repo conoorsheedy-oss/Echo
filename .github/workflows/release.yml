@@ -10,6 +10,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch: # lets you re-run a build by hand from the Actions tab
 
 permissions:
   contents: write # needed to create the release and upload the .exe
@@ -22,10 +23,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           version="$(node -p "require('./package.json').version")"
@@ -34,22 +36,56 @@ jobs:
             exit 1
           fi
 
+      # Electron + electron-builder's tools (7-Zip, NSIS) are downloaded from
+      # GitHub; caching them avoids re-downloading and the occasional 504.
+      - name: Cache Electron and electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: builder-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       # Also runs the postinstall script, which downloads the hand-gesture model.
+      # Retried because GitHub's download servers sometimes time out (504).
       - name: Install dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && exit 0
+            echo "npm ci failed (attempt $i), retrying in 20s..."
+            sleep 20
+          done
+          exit 1
 
       - name: Run tests
         run: npm test
 
       # `predist` re-checks the hand-gesture files and fails if any are missing,
-      # so a release never ships without them. publish is null in package.json,
-      # so electron-builder only builds; the next step does the upload.
+      # so a release never ships without them. Retried for the same 504 reason;
+      # files already downloaded are cached, so each retry gets further.
       - name: Build installer (dist/Echo-Setup-<version>.exe)
-        run: npm run dist
+        shell: bash
+        run: |
+          for i in 1 2 3 4; do
+            npm run dist && exit 0
+            echo "build failed (attempt $i), retrying in 20s..."
+            sleep 20
+          done
+          exit 1
 
       - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Echo-Setup-*.exe
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+      # Manual runs (not from a tag) just keep the .exe as a downloadable artifact.
+      - name: Keep installer as a workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Echo-Setup
+          path: dist/Echo-Setup-*.exe
