@@ -8,6 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+require('./helpers/electron-stub'); // no Electron binary needed (see file)
 delete process.env.GEMINI_MODEL; // use the built-in default model id
 const keyStore = require('../src/main/keyStore');
 keyStore.getKey = (provider) => (provider === 'gemini' ? 'test-gemini-key' : 'test-groq-key');
