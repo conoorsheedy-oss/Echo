@@ -1,11 +1,13 @@
-// Where the user's own Groq + Gemini API keys live.
+// Where the user's own API keys live: Groq + Gemini, plus an optional
+// Deepgram key (only needed for Settings > Speech-to-text > Deepgram).
 //
 // 1. Keys pasted into the in-app "API keys" screen are encrypted with
 //    Electron's safeStorage (backed by the OS: DPAPI on Windows, Keychain on
 //    macOS, libsecret/kwallet on Linux) and written to keys.enc.json in the
 //    app's private userData folder. Only ciphertext ever touches disk.
 // 2. If nothing is saved there, GROQ_API_KEY / GEMINI_API_KEY from the
-//    environment (or a .env file next to package.json -- see env.js) are
+//    environment (DEEPGRAM_API_KEY too; or a .env file next to package.json
+//    -- see env.js) are
 //    used instead. Handy for development.
 //
 // Keys stay in the main process. The renderer only ever learns booleans
@@ -17,8 +19,9 @@ const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
 
-const PROVIDERS = ['groq', 'gemini'];
-const ENV_VARS = { groq: 'GROQ_API_KEY', gemini: 'GEMINI_API_KEY' };
+const PROVIDERS = ['groq', 'gemini', 'deepgram'];
+const ENV_VARS = { groq: 'GROQ_API_KEY', gemini: 'GEMINI_API_KEY', deepgram: 'DEEPGRAM_API_KEY' };
+const LABELS = { groq: 'Groq', gemini: 'Gemini', deepgram: 'Deepgram' };
 
 function keysFile() {
   return path.join(app.getPath('userData'), 'keys.enc.json');
@@ -96,11 +99,14 @@ function getStatus() {
   const enc = encryptionStatus();
   const groqSource = sourceOf('groq');
   const geminiSource = sourceOf('gemini');
+  const deepgramSource = sourceOf('deepgram');
   return {
     groqKeySet: !!groqSource,
     geminiKeySet: !!geminiSource,
+    deepgramKeySet: !!deepgramSource,
     groqSource, // 'saved' | 'env' | null
     geminiSource,
+    deepgramSource,
     canSave: enc.available,
     cannotSaveReason: enc.available ? '' : enc.reason,
   };
@@ -113,18 +119,18 @@ function validateKey(provider, value) {
   const v = value.trim();
   if (!v) return '';
   if (v.length < 10 || v.length > 400 || /\s/.test(v)) {
-    const label = provider === 'groq' ? 'Groq' : 'Gemini';
+    const label = LABELS[provider] || 'API';
     throw new Error(`That doesn't look like a ${label} API key -- copy it again from the provider's page.`);
   }
   return v;
 }
 
-// keys: { groq?: string, gemini?: string } -- empty/missing fields are left as they are.
+// keys: { groq?, gemini?, deepgram? } (strings) -- empty/missing fields are left as they are.
 function saveKeys(keys = {}) {
   const enc = encryptionStatus();
   if (!enc.available) {
     const err = new Error(
-      `${enc.reason} Echo won't store keys in plain text -- put GROQ_API_KEY and GEMINI_API_KEY in a .env file instead (see README).`
+      `${enc.reason} Echo won't store keys in plain text -- put GROQ_API_KEY and GEMINI_API_KEY (and DEEPGRAM_API_KEY if you use it) in a .env file instead (see README).`
     );
     err.code = 'NO_SAFE_STORAGE';
     throw err;

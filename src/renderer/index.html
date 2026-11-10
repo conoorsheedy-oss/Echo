@@ -23,7 +23,7 @@
         <div id="menu-wrap">
           <button id="menu-btn" class="icon-btn" title="Menu">&#8943;</button>
           <div id="menu" class="hidden">
-            <button id="api-keys-btn" title="Add, test or remove your Groq + Gemini API keys">API keys</button>
+            <button id="api-keys-btn" title="Add, test or remove your API keys and pick the speech-to-text service">API keys</button>
             <button id="shortcuts-btn" title="Show all keyboard shortcuts">Keyboard shortcuts</button>
             <button id="gestures-menu-btn" title="Webcam hand-gesture shortcuts (experimental, off by default)">Hand gestures&hellip;</button>
             <button id="hide-from-share-btn" title="Hide this overlay from screen sharing/recording -- off by default, only turn this on if whoever you're sharing with knows (Ctrl+Shift+H)">Hide from Screen Share: Off</button>
@@ -182,13 +182,24 @@
         <div class="brand-mark" aria-hidden="true"></div>
         <p id="settings-intro" class="placeholder">
           Echo is bring-your-own-keys: it talks straight to Groq (speech-to-text) and Google Gemini (answers)
-          with your own API keys. Both have free tiers.
+          with your own API keys. Both have free tiers. Deepgram (live speech-to-text) is optional.
         </p>
 
         <form id="settings-form" autocomplete="off">
+          <div class="key-field" id="stt-provider-field">
+            <div class="key-field-head">
+              <label for="stt-provider-select">Speech-to-text</label>
+            </div>
+            <select id="stt-provider-select" title="Which service turns speech into the live transcript">
+              <option value="groq">Groq Whisper (free, default)</option>
+              <option value="deepgram">Deepgram Nova-3 (live, faster)</option>
+            </select>
+            <p id="stt-provider-note" class="key-note"></p>
+          </div>
+
           <div class="key-field">
             <div class="key-field-head">
-              <label for="groq-key-input">Groq API key</label>
+              <label for="groq-key-input">Groq API key <span id="groq-key-optional" class="key-optional hidden" title="With Deepgram selected, Groq is only the automatic fallback">optional</span></label>
               <span id="groq-key-state" class="key-state">Not set</span>
             </div>
             <input id="groq-key-input" type="password" placeholder="Paste a new Groq key" spellcheck="false" />
@@ -210,11 +221,24 @@
             </div>
           </div>
 
+          <div class="key-field hidden" id="deepgram-key-field">
+            <div class="key-field-head">
+              <label for="deepgram-key-input">Deepgram API key <span id="deepgram-key-optional" class="key-optional" title="Only needed when Speech-to-text is set to Deepgram">optional</span></label>
+              <span id="deepgram-key-state" class="key-state">Not set</span>
+            </div>
+            <input id="deepgram-key-input" type="password" placeholder="Paste a new Deepgram key" spellcheck="false" />
+            <div class="key-help">
+              <span>$200 free credit, no card; ~ $0.46/hour after that:</span>
+              <span class="key-url">console.deepgram.com/signup</span>
+              <button type="button" id="open-deepgram-keys-btn" class="link-btn" title="Open https://console.deepgram.com/signup in your browser">Open</button>
+            </div>
+          </div>
+
           <div id="settings-message" role="status" aria-live="polite"></div>
 
           <div id="settings-actions">
             <button type="submit" id="save-keys-btn" class="primary">Save keys</button>
-            <button type="button" id="test-keys-btn" title="Check both keys with a free, read-only request">Test keys</button>
+            <button type="button" id="test-keys-btn" title="Check your keys with free, read-only requests">Test keys</button>
           </div>
         </form>
 
@@ -246,6 +270,7 @@
           <h4>Where your data goes</h4>
           <ul>
             <li>Audio chunks go to <strong>Groq</strong> for transcription, under your key.</li>
+            <li>With Speech-to-text set to Deepgram, live audio (only while someone is talking) streams to <strong>Deepgram</strong> instead, under your key. Groq gets audio only if Echo has to fall back to it.</li>
             <li>Transcript text, matched knowledge-base snippets and any screenshots you attach go to <strong>Google Gemini</strong>, under your key.</li>
             <li>Nothing goes to any Echo server &mdash; there isn't one.</li>
             <li>On Gemini's free tier, Google may use your prompts and responses to improve its products. Use a paid (billing-enabled) key to avoid that.</li>
@@ -295,6 +320,8 @@
   </div>
 
   <script src="vad-core.js"></script>
+  <script src="pcm-core.js"></script>
+  <script src="stt-core.js"></script>
   <script src="renderer.js"></script>
   <script src="gesture-core.js"></script>
   <script src="gestures.js"></script>

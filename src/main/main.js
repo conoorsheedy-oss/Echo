@@ -29,12 +29,18 @@ const ai = require('./ai');
 const keyStore = require('./keyStore');
 const knowledge = require('./knowledge');
 const { createRequestRegistry } = require('./ai-requests');
+const { createDeepgramManager } = require('./deepgram');
+
+// Optional Deepgram live speech-to-text (Settings > Speech-to-text). The
+// sockets live here so the key never reaches the renderer (deepgram.js).
+const deepgram = createDeepgramManager({ getKey: (provider) => keyStore.getKey(provider) });
 
 // The only external pages the app may open (Settings > "Get a free key").
 // The renderer asks by name; it can't pass an arbitrary URL.
 const EXTERNAL_PAGES = {
   groq: 'https://console.groq.com/keys',
   gemini: 'https://aistudio.google.com/apikey',
+  deepgram: 'https://console.deepgram.com/signup',
 };
 
 // Log unexpected errors instead of letting Electron quit mid-conversation.
@@ -332,12 +338,15 @@ function createOverlayWindow() {
 
   overlayWindow.on('closed', () => {
     overlayWindow = null;
+    deepgram.stopAll().catch(() => {});
   });
 
   // If the renderer process dies, recreate the window instead of leaving a
   // blank one (the tray icon and hotkeys keep working).
   overlayWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('[main] Overlay renderer process gone:', details.reason);
+    // Its live transcription streams have nobody to report to any more.
+    deepgram.stopAll().catch(() => {});
     const dead = overlayWindow;
     overlayWindow = null;
     try {
@@ -553,6 +562,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  deepgram.stopAll().catch(() => {});
 });
 
 // ---- IPC: renderer -> main ----
@@ -702,6 +712,39 @@ handle('stt:transcribe', async (_evt, { base64, mimeType, speaker } = {}) => {
   return { text, speaker };
 });
 
+// ---- Deepgram live streams (Settings > Speech-to-text > Deepgram) ----
+// stt:stream-start opens one WebSocket per speaker and resolves once it's
+// open (or rejects with a coded, friendly error). Transcript events come
+// back as 'stt:stream-event' { speaker, kind: 'interim' | 'final' |
+// 'end-of-speech' | 'status' | 'error', ... }. Audio arrives fire-and-forget
+// on 'stt:stream-audio' (16 kHz mono Int16 PCM frames, size-checked).
+function validateSpeaker(speaker) {
+  if (speaker !== 'You' && speaker !== 'Them') throw new Error('Invalid speaker.');
+  return speaker;
+}
+
+handle('stt:stream-start', async (evt, { speaker } = {}) => {
+  validateSpeaker(speaker);
+  if (!isOwnOverlayPage(evt.sender)) throw new Error('Not allowed.');
+  const sender = evt.sender;
+  return deepgram.start(speaker, (payload) => {
+    if (sender && !sender.isDestroyed()) sender.send('stt:stream-event', payload);
+  });
+});
+
+handle('stt:stream-stop', async (_evt, { speaker } = {}) => {
+  if (speaker === undefined || speaker === null) await deepgram.stopAll();
+  else await deepgram.stop(validateSpeaker(speaker));
+  return { ok: true };
+});
+
+// ~10 frames a second per stream, so no reply; bad frames are just dropped.
+ipcMain.on('stt:stream-audio', (evt, speaker, pcm) => {
+  if (speaker !== 'You' && speaker !== 'Them') return;
+  if (!isOwnOverlayPage(evt.sender)) return;
+  deepgram.audio(speaker, pcm);
+});
+
 // ---- Answers: streaming + cancellation ----
 // Each suggest/ask request carries a renderer-made requestId. While Gemini
 // streams, every piece of text is forwarded as an 'ai:chunk' event
@@ -833,13 +876,18 @@ handle('ai:summarize', async (_evt, { transcript } = {}) => {
 
 handle('keys:status', async () => keyStore.getStatus());
 
-handle('keys:save', async (_evt, { groq, gemini } = {}) => {
+handle('keys:save', async (_evt, { groq, gemini, deepgram: deepgramKey } = {}) => {
   assertOptionalString(groq, 'Groq key', 400);
   assertOptionalString(gemini, 'Gemini key', 400);
-  return keyStore.saveKeys({ groq, gemini });
+  assertOptionalString(deepgramKey, 'Deepgram key', 400);
+  return keyStore.saveKeys({ groq, gemini, deepgram: deepgramKey });
 });
 
-handle('keys:remove', async () => keyStore.removeKeys());
+// Removing keys also ends any live Deepgram stream still using one.
+handle('keys:remove', async () => {
+  await deepgram.stopAll();
+  return keyStore.removeKeys();
+});
 
 // Cheap, token-free check that each key is accepted by its provider.
 handle('keys:test', async () => ai.testKeys());
@@ -975,7 +1023,12 @@ handle('screen:capture', async (_evt, { sourceId } = {}) => {
 });
 
 // Non-secret config for the diagnostics panel (model names only, never keys).
-handle('config:status', async () => ({ groqModel: ai.groqModel(), geminiModel: ai.geminiModel() }));
+handle('config:status', async () => ({
+  groqModel: ai.groqModel(),
+  geminiModel: ai.geminiModel(),
+  deepgramModel: deepgram.model(),
+  deepgramLanguage: deepgram.language(),
+}));
 
 // Lets a freshly (re)loaded renderer pick up Privacy Mode if it's already on.
 handle('privacy:status', async () => ({ enabled: privacyModeEnabled }));

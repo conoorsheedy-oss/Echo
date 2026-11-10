@@ -6,6 +6,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('assistant', {
   getDesktopAudioSourceId: () => ipcRenderer.invoke('desktop:get-audio-source'),
   transcribeChunk: (payload) => ipcRenderer.invoke('stt:transcribe', payload),
+  // Deepgram live streams (Settings > Speech-to-text > Deepgram); the socket
+  // and key live in main (src/main/deepgram.js). speaker: 'You' | 'Them'.
+  startSttStream: (speaker) => ipcRenderer.invoke('stt:stream-start', { speaker }),
+  stopSttStream: (speaker) => ipcRenderer.invoke('stt:stream-stop', { speaker }),
+  // pcm: Uint8Array of 16 kHz mono Int16 samples (~100 ms). Fire-and-forget.
+  sendSttAudio: (speaker, pcm) => ipcRenderer.send('stt:stream-audio', speaker, pcm),
+  onSttEvent: (cb) => ipcRenderer.on('stt:stream-event', (_e, payload) => cb(payload)),
   // payload.images: optional array (max 4) of { mimeType, base64, name } screenshots.
   // payload.requestId (optional, [A-Za-z0-9_-]{1,64}): text streams back as
   // onAiChunk({ requestId, text }) events; the promise resolves with the full
@@ -32,7 +39,7 @@ contextBridge.exposeInMainWorld('assistant', {
   saveKeys: (keys) => ipcRenderer.invoke('keys:save', keys),
   removeKeys: () => ipcRenderer.invoke('keys:remove'),
   testKeys: () => ipcRenderer.invoke('keys:test'),
-  // page: 'groq' | 'gemini' -- main maps it to an allowlisted URL.
+  // page: 'groq' | 'gemini' | 'deepgram' -- main maps it to an allowlisted URL.
   openKeyPage: (page) => ipcRenderer.invoke('external:open', { page }),
 
   // Screen-share/recording visibility -- off by default, explicit opt-in (see main.js)

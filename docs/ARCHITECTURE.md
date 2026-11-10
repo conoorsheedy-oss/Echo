@@ -6,9 +6,11 @@ Echo is a plain Electron app: no framework, no bundler. Three pieces:
 ┌──────────── Renderer (src/renderer) ─────────────┐
 │ index.html + renderer.js + styles.css             │  the overlay UI
 │ vad-core.js   voice-activity chunking (pure)      │  no Node, strict CSP
+│ pcm-core.js + pcm-worklet.js  PCM for Deepgram    │
+│ stt-core.js   speech-to-text key readiness (pure) │
 │ gesture-core.js + gestures.js (optional webcam)   │
 └───────────────┬───────────────────▲───────────────┘
-   api.* calls  │ invoke / send     │ events (ai:chunk, hotkey:*, window:*)
+   api.* calls  │ invoke / send     │ events (ai:chunk, stt:stream-event, hotkey:*, window:*)
 ┌───────────────▼───────────────────┴───────────────┐
 │ preload.js  ->  window.assistant (contextBridge)  │  the only bridge
 └───────────────┬───────────────────▲───────────────┘
@@ -16,6 +18,8 @@ Echo is a plain Electron app: no framework, no bundler. Three pieces:
 │ Main process (src/main)                           │
 │ main.js       window, tray, shortcuts, IPC        │
 │ ai.js         Groq + Gemini over HTTPS, prompts   │──► Groq  (audio → text)
+│ deepgram.js   live WebSockets (ws), one/speaker   │──► Deepgram (PCM stream → live text)
+│ deepgram-core.js  URL, parsing, errors (pure)     │
 │ humanize.js   strips em dashes / stock openers    │──► Gemini (text + images → answer)
 │ ai-requests.js  cancels superseded requests       │
 │ keyStore.js   encrypted keys (safeStorage)        │
@@ -33,7 +37,7 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 
 | Area | Renderer → main (`invoke` unless noted) | Main → renderer (events) |
 |---|---|---|
-| Audio | `desktop:get-audio-source`, `stt:transcribe` | |
+| Audio | `desktop:get-audio-source`, `stt:transcribe`, `stt:stream-start`, `stt:stream-stop`, `stt:stream-audio` (send) | `stt:stream-event` |
 | Answers | `ai:suggest`, `ai:ask`, `ai:summarize`, `summary:export` | `ai:chunk` |
 | Keys | `keys:status`, `keys:save`, `keys:remove`, `keys:test`, `external:open` | |
 | Screen | `screen:list-sources`, `screen:capture` | |
@@ -56,6 +60,33 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 6. Each uploaded chunk goes to `stt:transcribe` → `ai.transcribeAudio()` → Groq Whisper (`verbose_json`). Tiny chunks and Whisper's "thanks for watching" hallucinations are dropped.
 7. Lines are appended in recording order per stream as `You:` (mic) or `Them:` (system audio), with the chunk's cut reason and the time its speech ended.
 8. **Stop Listening** discards the chunk in progress (as before); a chunk already cut at a pause still gets transcribed.
+
+## Live speech-to-text with Deepgram (optional)
+
+Settings > **Speech-to-text** picks the provider (`renderer.js` keeps it in `localStorage` as `echo.sttProvider`; it applies on the next Start Listening). `stt-core.js` decides what Start needs: Gemini always, plus Groq (Groq mode) or Deepgram (Deepgram mode). In Deepgram mode Groq is optional and only used as the fallback.
+
+```
+mic / system audio ─► MediaStreamSource ─┬─► AnalyserNode ─► VadSegmenter (halo + "someone is talking")
+  (16 kHz AudioContext                   └─► AudioWorklet pcm-worklet.js (ScriptProcessorNode fallback)
+   when Chromium allows)                        ─► ~100 ms Float32 blocks
+                                                ─► Downsampler → 16 kHz ─► Int16 ─► PcmFramer (1600 samples)
+                                                ─► AudioGate: only while talking (+4 frames pre-roll, 1.5 s tail)
+                                                ─► ipcRenderer.send('stt:stream-audio', speaker, bytes)
+main: deepgram.js ─► wss://api.deepgram.com/v1/listen  (one socket per speaker, Authorization: Token <key>)
+      ◄─ Results / UtteranceEnd ─► deepgram-core.js assembler ─► 'stt:stream-event' to the renderer
+```
+
+1. **Start**: for each stream the renderer calls `stt:stream-start` (`{ speaker }`). Main opens a WebSocket with `model=nova-3`, `smart_format=true`, `interim_results=true`, `endpointing=300`, `utterance_end_ms=1000`, `vad_events=true`, `encoding=linear16`, `sample_rate=16000`, `channels=1`, `language=en` (`DEEPGRAM_MODEL` / `DEEPGRAM_LANGUAGE` in `.env` override the last two). The key goes in the handshake's `Authorization: Token <key>` header via the `ws` package: Electron 31's Node has no global WebSocket, and the WHATWG API can't set headers anyway. (Deepgram's `token` subprotocol alternative would put the key in `Sec-WebSocket-Protocol`, which is logged more readily.) The invoke resolves once the socket is open, or rejects with a coded error: `BAD_KEY` (401/403), `NO_CREDIT` (402), `RATE_LIMIT` (429), `OFFLINE` / `TIMEOUT`, `NO_KEY`.
+2. **Audio**: `stt:stream-audio` is fire-and-forget (`ipcRenderer.send`, ~10 frames/s per stream while someone talks). Main checks the sender is Echo's own page and that the frame is bytes with an even length ≤ 1 s of audio, then forwards it as a binary WebSocket message. A few frames are queued while (re)connecting.
+3. **Idle**: the renderer stops sending 1.5 s after the last voiced VAD frame (longer than `utterance_end_ms`, so Deepgram still sees the pause). Main then sends `{"type":"Finalize"}` (0.8 s after the last frame) and `{"type":"KeepAlive"}` every 5 s (Deepgram closes idle streams after ~10 s; its docs suggest 3-5 s).
+4. **Transcripts**: `deepgram-core.js` turns `Results` / `UtteranceEnd` into renderer events `{ speaker, kind }`:
+   - `interim` `{ text }`: settled words of the utterance + the latest guess. Shown as one dimmed line per speaker at the bottom of the transcript, replaced in place. Never sent to Gemini.
+   - `final` `{ text, endOfSpeech }`: on `speech_final`, `UtteranceEnd` or a `Finalize` flush (`endOfSpeech: true`); a line that runs past 15 s without a pause is cut with `endOfSpeech: false`.
+   - `end-of-speech`: `UtteranceEnd` after a line that was cut for length.
+   The renderer feeds finals to the same `appendLine()` as Groq chunks, as `cut: 'silence'` (end of speech) or `cut: 'max'` (mid-speech). So question detection, the 300 ms / 1.5 s waits, de-dup and the "Speech end → first answer word" latency (speech end = last voiced VAD frame) work unchanged; `end-of-speech` releases a question that was waiting for its second half.
+5. **Drops**: an unexpected close reconnects after 0.5 s, 1.5 s, 3.5 s (the budget resets after 10 s of stable connection). Bad audio (1008) and auth/credit closes don't retry. After that main sends `{ kind: 'error', fatal: true, code, message }`; the renderer shows a banner and switches that stream to the Groq recorder if a Groq key is set, otherwise stops listening.
+6. **Stop**: `stt:stream-stop` sends `{"type":"CloseStream"}`; Deepgram returns the last finals and closes (force-closed after 3 s). Finals arriving right after Stop are still added, like a Groq chunk already cut at a pause. Removing keys (`keys:remove`), the window closing or the renderer crashing also close every stream.
+7. **Privacy Mode** works as before: it pauses automatic answers, not transcription. Keys, audio and transcripts are never logged; only HTTP statuses / close codes are.
 
 ## Suggestion flow
 
@@ -98,7 +129,8 @@ Prompts live in `ai.js`:
 ## Security notes
 
 - **CSP** (`index.html`): `default-src 'self'`, `connect-src 'self'` (the page can't call the internet; main does), no inline scripts or styles. `'wasm-unsafe-eval'` is only there so MediaPipe's WebAssembly can run.
-- The window denies new windows and navigation. `external:open` only opens two allowlisted key pages.
+- The window denies new windows and navigation. `external:open` only opens three allowlisted key pages (Groq, Gemini, Deepgram sign-up).
+- The CSP is unchanged by Deepgram mode: the AudioWorklet module (`pcm-worklet.js`) is a same-origin file, which `script-src 'self'` already allows, and the WebSocket is opened by main, not the page.
 - Permissions are deny-by-default and only for Echo's own page: mic and system audio, clipboard writes, and the camera only while gestures are on (plus a few seconds after a system-audio request, which uses a desktop video track).
 
 ## Tests
@@ -108,3 +140,7 @@ Prompts live in `ai.js`:
 - `test/gesture-core.test.js`: the hold-to-confirm state machine with synthetic frames.
 - `test/vad-core.test.js`: the voice-activity chunker with synthetic RMS frames (speech start, 700 ms silence cut, min/max chunk length, blips, idle reset, adaptive noise floor, hysteresis, throttled frames).
 - `test/ai-answers.test.js`: streaming, fallback, cancellation, thinking levels, prompt building (voice rules, answer styles) and the `humanize.js` safety net, with `fetch` mocked.
+- `test/deepgram-core.test.js`: listen URL, message parsing, the interim/final assembler (`speech_final`, `UtteranceEnd`, length cuts, `Finalize` flushes), error/close classification, backoff and KeepAlive/Finalize timing, PCM frame validation.
+- `test/deepgram-stream.test.js`: `deepgram.js` with a fake WebSocket and clock (auth header, 401/402/429/offline, queueing, KeepAlive, CloseStream, reconnect then fatal error) and the Deepgram key test with `fetch` mocked.
+- `test/pcm-core.test.js`: downsampling (48 / 44.1 kHz → 16 kHz, no drift), Int16 conversion, framing and the talk-only audio gate.
+- `test/stt-core.test.js`: which keys Start Listening needs per provider, and the banner text.

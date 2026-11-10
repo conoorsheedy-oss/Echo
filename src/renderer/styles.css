@@ -998,6 +998,17 @@ section.collapsible:not(.collapsed) {
 }
 .line.you .speaker { color: var(--speaker-you); }
 .line.them .speaker { color: var(--speaker-them); }
+/* Deepgram mode: the dimmed in-progress line per speaker (replaced as the
+   guess improves, then by the final line). */
+.line.interim {
+  color: var(--text-subtle);
+  font-style: italic;
+}
+.line.interim .speaker { opacity: 0.75; font-style: normal; }
+.line.interim::after {
+  content: " …";
+  color: var(--text-subtle);
+}
 
 #chat-log .line { font-size: var(--fs-sm); }
 
@@ -1428,6 +1439,24 @@ section.collapsible:not(.collapsed) {
   color: var(--success);
   background: var(--success-soft);
 }
+.key-field select {
+  width: 100%;
+}
+.key-optional {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-subtle);
+}
+.key-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-subtle);
+}
+.key-note:empty { display: none; }
 .key-field input {
   width: 100%;
   font-family: var(--font-mono);

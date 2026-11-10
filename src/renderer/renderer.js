@@ -1,7 +1,8 @@
 // Echo overlay UI. Talks to the main process only through window.assistant
-// (preload.js), wrapped below as `api`. vad-core.js loads before this file
-// (window.EchoVadCore); gestures.js loads after it and uses
-// window.echoGestureBridge (bottom of this file).
+// (preload.js), wrapped below as `api`. vad-core.js, pcm-core.js and
+// stt-core.js load before this file (window.EchoVadCore / EchoPcmCore /
+// EchoSttCore); gestures.js loads after it and uses window.echoGestureBridge
+// (bottom of this file).
 
 // ---- State ----
 // Audio is cut into chunks at pauses (voice-activity detection, see "Audio
@@ -117,6 +118,14 @@ const openGroqKeysBtn = document.getElementById('open-groq-keys-btn');
 const openGeminiKeysBtn = document.getElementById('open-gemini-keys-btn');
 const saveKeysBtn = document.getElementById('save-keys-btn');
 const testKeysBtn = document.getElementById('test-keys-btn');
+const deepgramKeyField = document.getElementById('deepgram-key-field');
+const deepgramKeyInput = document.getElementById('deepgram-key-input');
+const deepgramKeyState = document.getElementById('deepgram-key-state');
+const openDeepgramKeysBtn = document.getElementById('open-deepgram-keys-btn');
+const groqKeyOptional = document.getElementById('groq-key-optional');
+const deepgramKeyOptional = document.getElementById('deepgram-key-optional');
+const sttProviderSelect = document.getElementById('stt-provider-select');
+const sttProviderNote = document.getElementById('stt-provider-note');
 const removeKeysBtn = document.getElementById('remove-keys-btn');
 const settingsMessage = document.getElementById('settings-message');
 const settingsStorageNote = document.getElementById('settings-storage-note');
@@ -166,8 +175,10 @@ function normalizeIpcError(rawErr) {
 // Calls that actually go out to Groq / Gemini -- used for the offline
 // banner and the diagnostics panel (local-only calls say nothing about it).
 const AI_CALLS = new Set([
-  'transcribeChunk', 'generateSuggestion', 'askFollowUp', 'summarizeSession', 'testKeys',
+  'transcribeChunk', 'startSttStream', 'generateSuggestion', 'askFollowUp', 'summarizeSession', 'testKeys',
 ]);
+// Sent ~10 times a second per stream while someone talks: no wrapping.
+const PASS_THROUGH = new Set(['sendSttAudio']);
 
 // Named `api`, not `assistant`: a top-level `const assistant` clashes with the
 // window.assistant global the preload script exposes (SyntaxError at load).
@@ -175,8 +186,8 @@ const api = {};
 for (const name of Object.keys(window.assistant)) {
   const fn = window.assistant[name];
   if (typeof fn !== 'function') continue;
-  if (/^on[A-Z]/.test(name)) {
-    api[name] = fn; // event subscriptions -- nothing to wrap
+  if (/^on[A-Z]/.test(name) || PASS_THROUGH.has(name)) {
+    api[name] = fn; // event subscriptions / fire-and-forget -- nothing to wrap
     continue;
   }
   api[name] = async (...args) => {
@@ -224,7 +235,7 @@ function showToast(text, ms = 3500) {
 toastEl.addEventListener('click', () => toastEl.classList.add('hidden'));
 
 // ---- Offline detection ----
-// Flipped on by any Groq/Gemini call failing with OFFLINE (network
+// Flipped on by any Groq/Gemini/Deepgram call failing with OFFLINE (network
 // unreachable), off again by any call reaching the provider. There's no
 // Echo server to probe, so the next real request is the retry.
 let aiOffline = false;
@@ -235,7 +246,7 @@ function setOffline(offline) {
   setBanner('offline', offline
     ? (navigator.onLine === false
       ? "You're offline -- answers are paused until the connection is back."
-      : "Can't reach Groq/Gemini -- check your connection. Echo retries with the next request.")
+      : "Can't reach the speech or answer service -- check your connection. Echo retries with the next request.")
     : null);
 }
 
@@ -261,12 +272,30 @@ function noteAiCall(name, ok, ms, err) {
 // The renderer only ever knows whether each key is set and where it came
 // from ('saved' = encrypted in the app's data folder, 'env' = .env file).
 let keyStatus = {
-  groqKeySet: false, geminiKeySet: false, groqSource: null, geminiSource: null,
+  groqKeySet: false, geminiKeySet: false, deepgramKeySet: false,
+  groqSource: null, geminiSource: null, deepgramSource: null,
   canSave: true, cannotSaveReason: '',
 };
 
+// ---- Speech-to-text provider (Settings > Speech-to-text) ----
+// 'groq' (default): clips cut at pauses -> Groq Whisper. 'deepgram': live
+// PCM stream -> Deepgram Nova-3 via main (deepgram.js); Groq, if its key is
+// set, is the automatic fallback. Stored per computer; applies on the next
+// Start Listening.
+const SttCore = window.EchoSttCore;
+const STT_PROVIDER_KEY = 'echo.sttProvider';
+let sttProvider = 'groq';
+try {
+  sttProvider = SttCore.normalizeProvider(localStorage.getItem(STT_PROVIDER_KEY));
+} catch (err) { /* default is fine */ }
+
+function sttReadiness() {
+  return SttCore.readiness(keyStatus, sttProvider);
+}
+
+// Gemini + the chosen speech-to-text provider's key.
 function keysReady() {
-  return !!(keyStatus.groqKeySet && keyStatus.geminiKeySet);
+  return sttReadiness().ready;
 }
 
 function isKeyError(err) {
@@ -283,34 +312,57 @@ function applyKeyStatus(status) {
   if (status && typeof status === 'object') keyStatus = { ...keyStatus, ...status };
   groqKeyState.textContent = describeKeySource(keyStatus.groqSource);
   geminiKeyState.textContent = describeKeySource(keyStatus.geminiSource);
+  deepgramKeyState.textContent = describeKeySource(keyStatus.deepgramSource);
   groqKeyState.classList.toggle('set', !!keyStatus.groqKeySet);
   geminiKeyState.classList.toggle('set', !!keyStatus.geminiKeySet);
+  deepgramKeyState.classList.toggle('set', !!keyStatus.deepgramKeySet);
+  syncSttProviderUI();
 
-  const hasSaved = keyStatus.groqSource === 'saved' || keyStatus.geminiSource === 'saved';
+  const anySet = keyStatus.groqKeySet || keyStatus.geminiKeySet || keyStatus.deepgramKeySet;
+  const hasSaved = [keyStatus.groqSource, keyStatus.geminiSource, keyStatus.deepgramSource].includes('saved');
   removeKeysBtn.disabled = !hasSaved;
-  testKeysBtn.disabled = !(keyStatus.groqKeySet || keyStatus.geminiKeySet);
+  testKeysBtn.disabled = !anySet;
   saveKeysBtn.disabled = !keyStatus.canSave;
   groqKeyInput.disabled = !keyStatus.canSave;
   geminiKeyInput.disabled = !keyStatus.canSave;
+  deepgramKeyInput.disabled = !keyStatus.canSave;
 
   const notes = [];
   if (!keyStatus.canSave) {
-    notes.push(`Can't save keys securely on this system: ${keyStatus.cannotSaveReason} Put GROQ_API_KEY and GEMINI_API_KEY in a .env file next to package.json instead (see README), then restart Echo.`);
+    notes.push(`Can't save keys securely on this system: ${keyStatus.cannotSaveReason} Put GROQ_API_KEY and GEMINI_API_KEY (and DEEPGRAM_API_KEY if you use it) in a .env file next to package.json instead (see README), then restart Echo.`);
   } else {
     notes.push("Saved keys are encrypted with your operating system's keychain and stored only on this computer. Echo never shows them again after saving.");
   }
-  if (keyStatus.groqSource === 'env' || keyStatus.geminiSource === 'env') {
+  if ([keyStatus.groqSource, keyStatus.geminiSource, keyStatus.deepgramSource].includes('env')) {
     notes.push('Keys marked "From .env" come from your .env file -- edit or delete that file to change them.');
   }
   settingsStorageNote.textContent = notes.join(' ');
 
-  if (keysReady()) {
-    setBanner('keys', null);
-  } else {
-    const missing = [!keyStatus.groqKeySet && 'Groq', !keyStatus.geminiKeySet && 'Gemini'].filter(Boolean).join(' + ');
-    setBanner('keys', `Add your free ${missing} API key${missing.includes('+') ? 's' : ''} to start -- click here.`);
-  }
+  setBanner('keys', SttCore.missingKeysBanner(sttReadiness()) || null);
   syncListeningUI();
+}
+
+// Settings: the Deepgram key field shows when Deepgram is picked (or a
+// Deepgram key is already set); Groq is marked optional (fallback) then.
+function syncSttProviderUI() {
+  const dg = sttProvider === 'deepgram';
+  sttProviderSelect.value = sttProvider;
+  deepgramKeyField.classList.toggle('hidden', !dg && !keyStatus.deepgramKeySet);
+  // Whichever speech-to-text key isn't the chosen one is marked optional.
+  groqKeyOptional.classList.toggle('hidden', !dg);
+  deepgramKeyOptional.classList.toggle('hidden', dg);
+  sttProviderNote.textContent = dg
+    ? 'Words appear live as people talk, and answers start sooner. Needs a Deepgram key. If Deepgram fails, Echo falls back to Groq when a Groq key is set.'
+    : 'Audio is sent in short clips at natural pauses (about 0.7 s after someone stops). Free with a Groq key.';
+}
+
+function setSttProvider(value) {
+  const next = SttCore.normalizeProvider(value);
+  const changed = next !== sttProvider;
+  sttProvider = next;
+  try { localStorage.setItem(STT_PROVIDER_KEY, sttProvider); } catch (err) { /* not remembered -- fine */ }
+  applyKeyStatus();
+  if (changed && listening) showToast('Speech-to-text change applies the next time you press Start Listening.', 4000);
 }
 
 async function refreshKeyStatus() {
@@ -333,7 +385,10 @@ function openSettings(message) {
   refreshKeyStatus().catch(() => {});
   setTimeout(() => {
     if (!keyStatus.canSave) return;
-    (keyStatus.groqKeySet && !keyStatus.geminiKeySet ? geminiKeyInput : groqKeyInput).focus();
+    // The first key that's still missing, in the order the fields appear.
+    const missing = sttReadiness().missing;
+    const inputs = { Groq: groqKeyInput, Gemini: geminiKeyInput, Deepgram: deepgramKeyInput };
+    (inputs[missing[0]] || groqKeyInput).focus();
   }, 0);
 }
 
@@ -341,6 +396,7 @@ function closeSettings() {
   settingsOverlay.classList.add('hidden');
   groqKeyInput.value = '';
   geminiKeyInput.value = '';
+  deepgramKeyInput.value = '';
   setSettingsMessage('');
 }
 
@@ -353,8 +409,8 @@ function syncContentProtectionUI(enabled) {
 async function init() {
   syncListeningUI();
   try {
-    const { groqModel, geminiModel } = await api.getConfigStatus();
-    modelsText = `${groqModel || '?'} (STT), ${geminiModel || '?'} (answers)`;
+    const { groqModel, geminiModel, deepgramModel } = await api.getConfigStatus();
+    modelsText = `${groqModel || '?'} / ${deepgramModel || '?'} (speech-to-text), ${geminiModel || '?'} (answers)`;
     modelNote.textContent = `Answers use ${geminiModel || 'the default Gemini model'}. Google retires older Flash models over time -- to use a newer Gemini Flash model, set GEMINI_MODEL in your .env file and restart Echo.`;
   } catch (e) { /* diagnostics only */ }
   try {
@@ -448,7 +504,8 @@ function appendLine(speaker, text, meta = null) {
   const div = document.createElement('div');
   div.className = `line ${speaker === 'You' ? 'you' : 'them'}`;
   div.innerHTML = `<span class="speaker">${speaker}:</span> ${escapeHtml(text)}`;
-  transcriptEl.appendChild(div);
+  // Finished lines go above any live (in-progress) lines, which stay last.
+  transcriptEl.insertBefore(div, transcriptEl.querySelector('.line.interim'));
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
   const delay = autoSuggestDelay(text, meta);
@@ -490,6 +547,53 @@ function appendLine(speaker, text, meta = null) {
         autoSuggest(); // already waited well past the quiet window
       }, (meta && meta.cut === 'max' ? VAD_MAX_CHUNK_MS : CHUNK_MS) + 4000); // one full chunk + generous STT margin
     }
+  }
+}
+
+// ---- Live (interim) lines: Deepgram mode only ----
+// One dimmed in-progress line per speaker at the bottom of the transcript,
+// replaced as Deepgram refines its guess and removed when the final line
+// lands (appendLine). It's display-only: never part of the transcript sent
+// to Gemini, and it never triggers an answer.
+const interimEls = new Map(); // speaker -> element
+
+function setInterimLine(speaker, text) {
+  let el = interimEls.get(speaker);
+  const t = String(text || '').trim();
+  if (!t) {
+    if (el) el.remove();
+    interimEls.delete(speaker);
+    return;
+  }
+  const nearBottom = transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 40;
+  if (!el) {
+    el = document.createElement('div');
+    el.className = `line ${speaker === 'You' ? 'you' : 'them'} interim`;
+    el.title = 'Still listening -- this line may change';
+    transcriptEl.appendChild(el);
+    interimEls.set(speaker, el);
+  }
+  el.innerHTML = `<span class="speaker">${speaker}:</span> ${escapeHtml(t)}`;
+  if (nearBottom) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function clearInterimLines() {
+  for (const el of interimEls.values()) el.remove();
+  interimEls.clear();
+}
+
+// Deepgram said they've stopped talking (UtteranceEnd after a line that was
+// cut for length): the question that was waiting for its second half is done.
+function handleEndOfSpeech(speaker, speechEndAt) {
+  if (speaker !== 'Them') return;
+  if (lastThemChunk) lastThemChunk = { speechEndAt, transcribedAt: performance.now() };
+  if (awaitingNextThemLine) {
+    awaitingNextThemLine = false;
+    clearTimeout(pendingQuestionTimer);
+    pendingQuestionTimer = null;
+    scheduleAutoSuggest(AUTO_SUGGEST_AFTER_SPEECH_MS);
+  } else if (autoSuggestTimer) {
+    scheduleAutoSuggest(AUTO_SUGGEST_AFTER_SPEECH_MS);
   }
 }
 
@@ -539,6 +643,7 @@ function autoSuggest() {
 function clearTranscript() {
   transcriptLines.length = 0;
   transcriptEl.innerHTML = '';
+  interimEls.clear();
   awaitingNextThemLine = false;
   clearTimeout(pendingQuestionTimer);
   pendingQuestionTimer = null;
@@ -957,17 +1062,29 @@ const VAD_FRAME_MS = 40;
 const VAD_START_TIMEOUT_MS = 2000; // AudioContext still not running -> fixed chunks
 let audioCtx = null;
 
-function getAudioContext() {
+// preferredRate: Deepgram mode asks for a 16 kHz context so Chromium does
+// the (high-quality) resampling; pcm-core's Downsampler handles whatever
+// rate we actually get.
+function getAudioContext(preferredRate) {
   if (audioCtx && audioCtx.state !== 'closed') return audioCtx;
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return null;
   try {
-    audioCtx = new Ctx();
+    audioCtx = preferredRate ? new Ctx({ sampleRate: preferredRate }) : new Ctx();
   } catch (err) {
-    console.warn('No AudioContext -- using fixed-length audio chunks:', err);
-    audioCtx = null;
+    try {
+      audioCtx = new Ctx();
+    } catch (err2) {
+      console.warn('No AudioContext -- using fixed-length audio chunks:', err2);
+      audioCtx = null;
+    }
   }
   return audioCtx;
+}
+
+// ~21 ms of samples per VAD reading at 48 kHz (1024), ~32 ms at 16 kHz (512).
+function vadFftSize(ctx) {
+  return ctx.sampleRate <= 24000 ? 512 : 1024;
 }
 
 function closeAudioContext() {
@@ -1081,7 +1198,7 @@ function startRollingRecorder(stream, speaker, indicatorEl) {
     try {
       source = ctx.createMediaStreamSource(stream);
       analyser = ctx.createAnalyser();
-      analyser.fftSize = 1024; // ~21 ms of samples per reading at 48 kHz
+      analyser.fftSize = vadFftSize(ctx);
       source.connect(analyser); // never connected to the speakers
       if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     } catch (err) {
@@ -1134,6 +1251,233 @@ function startRollingRecorder(stream, speaker, indicatorEl) {
   };
 }
 
+// ---- Deepgram live streaming (Settings > Speech-to-text > Deepgram) ----
+// Per stream: the same AnalyserNode + VadSegmenter as above, used only for
+// the "speaking" halo and to know when someone is talking; raw samples from
+// an AudioWorklet (pcm-worklet.js; ScriptProcessorNode if that can't load)
+// -> 16 kHz Int16 100 ms frames (pcm-core.js) -> streamed to main only while
+// someone talks (AudioGate). Main owns the socket and the key (deepgram.js)
+// and sends transcript events back (onSttEvent below).
+const Pcm = window.EchoPcmCore || null;
+const workletReady = new WeakMap(); // AudioContext -> Promise from addModule
+
+async function createPcmCapture(ctx, source, onSamples) {
+  // Silent sink: worklet / script-processor nodes only run when pulled by
+  // the destination. Gain 0, so nothing is ever played.
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
+  sink.connect(ctx.destination);
+  if (ctx.audioWorklet && typeof AudioWorkletNode === 'function') {
+    try {
+      if (!workletReady.has(ctx)) workletReady.set(ctx, ctx.audioWorklet.addModule('pcm-worklet.js'));
+      await workletReady.get(ctx);
+      const node = new AudioWorkletNode(ctx, 'echo-pcm-capture', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 1, // Web Audio mixes stereo system audio down to mono for us
+        channelCountMode: 'explicit',
+        channelInterpretation: 'speakers',
+      });
+      node.port.onmessage = (e) => { if (e.data instanceof Float32Array) onSamples(e.data); };
+      source.connect(node);
+      node.connect(sink);
+      return {
+        kind: 'worklet',
+        stop() {
+          node.port.onmessage = null;
+          try { source.disconnect(node); } catch (err) { /* already gone */ }
+          try { node.disconnect(); sink.disconnect(); } catch (err) { /* already gone */ }
+        },
+      };
+    } catch (err) {
+      workletReady.delete(ctx);
+      console.warn('AudioWorklet unavailable -- using ScriptProcessorNode for live audio:', err && err.message);
+    }
+  }
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  proc.onaudioprocess = (e) => onSamples(new Float32Array(e.inputBuffer.getChannelData(0)));
+  source.connect(proc);
+  proc.connect(sink);
+  return {
+    kind: 'script-processor',
+    stop() {
+      proc.onaudioprocess = null;
+      try { source.disconnect(proc); } catch (err) { /* already gone */ }
+      try { proc.disconnect(); sink.disconnect(); } catch (err) { /* already gone */ }
+    },
+  };
+}
+
+// Resolves a pipeline { stop, mode, capture, lastVoicedAt } once Deepgram's
+// socket is open; rejects (coded error) if it can't start, so the caller can
+// fall back to Groq.
+async function startDeepgramStream(stream, speaker, indicatorEl) {
+  const ctx = getAudioContext(Pcm ? Pcm.TARGET_RATE : undefined);
+  if (!ctx || !Pcm || !Vad) throw Object.assign(new Error('Live audio capture is not available here.'), { code: 'NO_WEB_AUDIO' });
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+
+  await api.startSttStream(speaker);
+
+  let stopped = false;
+  let lastVoicedAt = -Infinity;
+  let capture = null;
+  let vadTimer = null;
+  let source = null;
+  const pipeline = {
+    speaker,
+    mode: () => 'deepgram',
+    capture: () => (capture ? capture.kind : 'starting'),
+    lastVoicedAt: () => lastVoicedAt,
+    // remote=false: main already closed the stream (fatal error).
+    stop({ remote = true } = {}) {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(vadTimer);
+      if (capture) capture.stop();
+      try { if (source) source.disconnect(); } catch (err) { /* already gone */ }
+      indicatorEl.classList.remove('active', 'speaking');
+      setInterimLine(speaker, '');
+      if (remote) api.stopSttStream(speaker).catch(() => {});
+    },
+  };
+
+  try {
+    source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = vadFftSize(ctx);
+    source.connect(analyser); // never connected to the speakers
+    const seg = new Vad.VadSegmenter();
+    const samples = new Float32Array(analyser.fftSize);
+    vadTimer = setInterval(() => {
+      if (stopped || ctx.state !== 'running') return;
+      const t = performance.now();
+      analyser.getFloatTimeDomainData(samples);
+      // Only `voiced` matters here; Deepgram finds the pauses itself.
+      const ev = seg.update({ rms: Vad.rms(samples), t });
+      indicatorEl.classList.toggle('speaking', ev.voiced);
+      if (ev.voiced) lastVoicedAt = t;
+    }, VAD_FRAME_MS);
+
+    const down = new Pcm.Downsampler(ctx.sampleRate, Pcm.TARGET_RATE);
+    const framer = new Pcm.PcmFramer();
+    const gate = new Pcm.AudioGate();
+    capture = await createPcmCapture(ctx, source, (block) => {
+      if (stopped) return;
+      const frames = framer.push(Pcm.floatTo16BitPCM(down.process(block)));
+      const now = performance.now();
+      for (const frame of frames) {
+        for (const out of gate.push(frame, { now, lastVoicedAt })) {
+          api.sendSttAudio(speaker, Pcm.int16ToBytes(out));
+        }
+      }
+    });
+    if (stopped) capture.stop();
+  } catch (err) {
+    pipeline.stop();
+    throw err;
+  }
+  indicatorEl.classList.add('active');
+  return pipeline;
+}
+
+function pipelineFor(speaker) {
+  return speaker === 'You' ? micRecorder : systemRecorder;
+}
+
+function setPipeline(speaker, pipeline) {
+  if (speaker === 'You') micRecorder = pipeline;
+  else systemRecorder = pipeline;
+}
+
+// Starts one stream on the chosen provider. Deepgram failing to start falls
+// back to Groq (if there's a key) for that stream.
+async function startStreamPipeline(stream, speaker, indicatorEl, provider) {
+  if (provider === 'deepgram') {
+    try {
+      return await startDeepgramStream(stream, speaker, indicatorEl);
+    } catch (err) {
+      return deepgramFailed(stream, speaker, indicatorEl, err);
+    }
+  }
+  return startRollingRecorder(stream, speaker, indicatorEl);
+}
+
+// Deepgram couldn't start, or gave up after reconnecting: tell the user and
+// carry on with Groq Whisper when possible.
+function deepgramFailed(stream, speaker, indicatorEl, err) {
+  console.warn(`Deepgram stream (${speaker}) failed:`, err.code || '', err.message);
+  if (err.code === 'BAD_KEY' || err.code === 'NO_KEY') setBanner('keys', `${err.message} Click here to fix.`);
+  if (!listening || !stream) return null;
+  const msg = /Deepgram/.test(err.message) ? err.message : `Deepgram: ${err.message}`;
+  if (keyStatus.groqKeySet) {
+    setBanner('service', `${msg} Using Groq Whisper for now.`);
+    return startRollingRecorder(stream, speaker, indicatorEl);
+  }
+  setBanner('service', msg);
+  return null;
+}
+
+let lastDeepgramStatus = {}; // speaker -> 'open' | 'reconnecting' | 'closed' (diagnostics)
+
+api.onSttEvent((ev) => {
+  if (!ev || (ev.speaker !== 'You' && ev.speaker !== 'Them')) return;
+  const speaker = ev.speaker;
+  const pipeline = pipelineFor(speaker);
+  const live = !!pipeline && pipeline.mode() === 'deepgram';
+  const speechEndAt = () => {
+    const t = live ? pipeline.lastVoicedAt() : -Infinity;
+    const now = performance.now();
+    return Number.isFinite(t) && now - t < 5000 ? t : now;
+  };
+  switch (ev.kind) {
+    case 'interim':
+      if (listening && live) setInterimLine(speaker, typeof ev.text === 'string' ? ev.text : '');
+      break;
+    case 'final': {
+      setInterimLine(speaker, '');
+      const text = typeof ev.text === 'string' ? ev.text.trim() : '';
+      // Finals flushed right after Stop still count (like a Groq chunk
+      // already cut at a pause).
+      if (!text) break;
+      transcribeFailures = 0;
+      // endOfSpeech = Deepgram heard the pause (speech_final / UtteranceEnd):
+      // to the auto-suggest logic that's the same as a VAD cut at a pause.
+      appendLine(speaker, text, { cut: ev.endOfSpeech ? 'silence' : 'max', speechEndAt: speechEndAt() });
+      break;
+    }
+    case 'end-of-speech':
+      setInterimLine(speaker, '');
+      handleEndOfSpeech(speaker, speechEndAt());
+      break;
+    case 'status':
+      lastDeepgramStatus[speaker] = ev.state;
+      if (ev.state === 'reconnecting' && listening && live) {
+        setBanner('service', 'Live transcription connection dropped -- reconnecting to Deepgram…');
+      } else if (ev.state === 'open' && bannerState.service && /reconnecting to Deepgram/.test(bannerState.service)) {
+        setBanner('service', null);
+      }
+      break;
+    case 'error': {
+      lastDeepgramStatus[speaker] = 'failed';
+      if (!ev.fatal || !live) break;
+      pipeline.stop({ remote: false });
+      setPipeline(speaker, null);
+      const err = Object.assign(new Error(String(ev.message || 'Live transcription stopped.')), { code: ev.code });
+      const stream = speaker === 'You' ? micStream : systemStream;
+      const next = deepgramFailed(stream, speaker, speaker === 'You' ? micIndicator : systemIndicator, err);
+      setPipeline(speaker, next);
+      if (!micRecorder && !systemRecorder && listening) {
+        stopListening();
+        showToast(`Listening stopped: ${err.message}`, 7000);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+});
+
 // Repeated transcription failures that aren't "offline" (e.g. the speech
 // service erroring) get a banner instead of failing silently in the console.
 let transcribeFailures = 0;
@@ -1179,11 +1523,11 @@ function updateSuggestionPlaceholder() {
       ? 'Listening… an answer appears here as soon as they ask a question. Ctrl+Enter to generate one now.'
       : keysReady()
         ? 'Not listening. Press Start Listening — answers appear here when a question is detected, or press Generate anytime.'
-        : 'Add your Groq + Gemini API keys (⋯ menu > API keys) to get started.';
+        : `${SttCore.missingKeysHint(sttReadiness())} (⋯ menu > API keys) to get started.`;
 }
 
 function syncListeningUI() {
-  // Start needs both keys; Stop must always work.
+  // Start needs Gemini + the speech-to-text provider's key; Stop must always work.
   listenBtn.disabled = listenBusy || (!listening && !keysReady());
   if (!listenBusy) listenBtn.textContent = listening ? 'Stop Listening' : 'Start Listening';
   listenBtn.classList.toggle('recording', listening);
@@ -1191,7 +1535,7 @@ function syncListeningUI() {
     ? 'Stop listening'
     : keysReady()
       ? 'Listen to mic + system audio and transcribe it'
-      : 'Add your Groq + Gemini API keys first (⋯ menu > API keys)';
+      : `${SttCore.missingKeysHint(sttReadiness())} first (⋯ menu > API keys)`;
   statusDot.classList.toggle('live', listening);
   statusDot.title = listening ? 'Listening' : 'Not listening';
   liveBadge.classList.toggle('hidden', !listening);
@@ -1202,7 +1546,7 @@ function syncListeningUI() {
 async function startListening() {
   if (listenBusy || listening) return;
   if (!keysReady()) {
-    openSettings('Add both keys to start listening.');
+    openSettings(`${SttCore.missingKeysHint(sttReadiness())} to start listening.`);
     return;
   }
   listenBusy = true;
@@ -1254,14 +1598,31 @@ async function startListeningInner() {
   listening = true;
   transcribeFailures = 0;
   setBanner('service', null);
+  lastDeepgramStatus = {};
+  const provider = sttProvider;
 
   systemIndicator.textContent = 'System audio';
-  micRecorder = startRollingRecorder(micStream, 'You', micIndicator);
-  if (systemStream && systemStream.getAudioTracks().length) {
-    systemRecorder = startRollingRecorder(systemStream, 'Them', systemIndicator);
-  } else {
+  const hasSystem = !!(systemStream && systemStream.getAudioTracks().length);
+  const [mic, system] = await Promise.all([
+    startStreamPipeline(micStream, 'You', micIndicator, provider),
+    hasSystem ? startStreamPipeline(systemStream, 'Them', systemIndicator, provider) : null,
+  ]);
+  if (!listening) {
+    // Stopped (e.g. keys removed) while the streams were still starting.
+    mic?.stop();
+    system?.stop();
+    return;
+  }
+  micRecorder = mic;
+  systemRecorder = system;
+  if (!hasSystem) {
     systemIndicator.textContent = 'System audio (unavailable)';
     showToast("Couldn't capture system audio -- only your mic is being transcribed.", 5000);
+  }
+  if (!micRecorder && !systemRecorder) {
+    // Deepgram couldn't start and there's no Groq key to fall back on.
+    await stopListening();
+    showToast('Could not start live transcription -- see the message at the top.', 6000);
   }
 }
 
@@ -1282,6 +1643,7 @@ async function stopListening() {
   systemRecorder?.stop();
   micRecorder = null;
   systemRecorder = null;
+  clearInterimLines();
 
   releaseStreams();
   closeAudioContext();
@@ -1305,26 +1667,36 @@ openGroqKeysBtn.addEventListener('click', () => {
 openGeminiKeysBtn.addEventListener('click', () => {
   api.openKeyPage('gemini').catch((err) => setSettingsMessage('Could not open the browser: ' + err.message, 'error'));
 });
+openDeepgramKeysBtn.addEventListener('click', () => {
+  api.openKeyPage('deepgram').catch((err) => setSettingsMessage('Could not open the browser: ' + err.message, 'error'));
+});
+sttProviderSelect.addEventListener('change', () => {
+  setSttProvider(sttProviderSelect.value);
+  if (sttProvider === 'deepgram' && !keyStatus.deepgramKeySet && keyStatus.canSave) deepgramKeyInput.focus();
+});
+syncSttProviderUI();
 
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const groq = groqKeyInput.value.trim();
   const gemini = geminiKeyInput.value.trim();
-  if (!groq && !gemini) {
+  const deepgram = deepgramKeyInput.value.trim();
+  if (!groq && !gemini && !deepgram) {
     setSettingsMessage('Paste at least one key first.', 'error');
     return;
   }
   saveKeysBtn.disabled = true;
   setSettingsMessage('Saving…', 'info');
   try {
-    const status = await api.saveKeys({ groq: groq || undefined, gemini: gemini || undefined });
+    const status = await api.saveKeys({ groq: groq || undefined, gemini: gemini || undefined, deepgram: deepgram || undefined });
     // The keys now live (encrypted) in the main process only -- drop them here.
     groqKeyInput.value = '';
     geminiKeyInput.value = '';
+    deepgramKeyInput.value = '';
     applyKeyStatus(status);
     setSettingsMessage(keysReady()
-      ? 'Saved. Checking the keys with Groq and Gemini…'
-      : 'Saved. Add the other key too to start listening.', 'ok');
+      ? 'Saved. Checking the keys…'
+      : `Saved. ${SttCore.missingKeysHint(sttReadiness())} to start listening.`, 'ok');
     if (keysReady()) await runKeyTest();
   } catch (err) {
     setSettingsMessage(err.message || 'Could not save keys.', 'error');
@@ -1337,13 +1709,32 @@ async function runKeyTest() {
   testKeysBtn.disabled = true;
   setSettingsMessage('Testing keys…', 'info');
   try {
-    const { groq, gemini } = await api.testKeys();
-    const allOk = groq.ok && gemini.ok;
-    setSettingsMessage(`Groq: ${groq.message}\nGemini: ${gemini.message}${allOk ? "\nYou're all set." : ''}`, allOk ? 'ok' : 'error');
+    const result = await api.testKeys();
+    const lines = [];
+    const needed = []; // results that must pass for Start Listening
+    const dg = sttProvider === 'deepgram';
+    const groq = result.groq || { ok: false, message: 'Not set.' };
+    const gemini = result.gemini || { ok: false, message: 'Not set.' };
+    const deepgram = result.deepgram || { ok: false, message: 'Not set.' };
+    if (!dg || keyStatus.groqKeySet) {
+      lines.push(`Groq: ${groq.message}${dg ? ' (fallback)' : ''}`);
+      if (!dg) needed.push(groq);
+    } else {
+      lines.push('Groq: not set (optional with Deepgram; it would be the fallback).');
+    }
+    lines.push(`Gemini: ${gemini.message}`);
+    needed.push(gemini);
+    if (dg || keyStatus.deepgramKeySet) {
+      lines.push(`Deepgram: ${deepgram.message}`);
+      if (dg) needed.push(deepgram);
+    }
+    const allOk = needed.every((r) => r.ok);
+    if (allOk) lines.push("You're all set.");
+    setSettingsMessage(lines.join('\n'), allOk ? 'ok' : 'error');
   } catch (err) {
     setSettingsMessage('Could not test keys: ' + err.message, 'error');
   } finally {
-    testKeysBtn.disabled = !(keyStatus.groqKeySet || keyStatus.geminiKeySet);
+    testKeysBtn.disabled = !(keyStatus.groqKeySet || keyStatus.geminiKeySet || keyStatus.deepgramKeySet);
   }
 }
 testKeysBtn.addEventListener('click', () => runKeyTest());
@@ -1943,8 +2334,18 @@ exportSummaryBtn.addEventListener('click', async () => {
 
 // ---- Diagnostics panel (Ctrl+Shift+D) ----
 function describeChunking() {
-  const modes = [micRecorder, systemRecorder].filter(Boolean).map((r) => r.mode());
-  if (!modes.length) return 'not recording';
+  const live = [micRecorder, systemRecorder].filter((r) => r && r.mode() === 'deepgram');
+  const recorders = [micRecorder, systemRecorder].filter((r) => r && r.mode() !== 'deepgram');
+  const parts = [];
+  if (live.length) {
+    parts.push(live.map((r) => `${r.speaker}: Deepgram live (${r.capture()}, ${lastDeepgramStatus[r.speaker] || 'open'})`).join('; '));
+  }
+  if (recorders.length) parts.push(describeRecorderChunking(recorders));
+  return parts.length ? parts.join(' · ') : 'not recording';
+}
+
+function describeRecorderChunking(recorders) {
+  const modes = recorders.map((r) => r.mode());
   if (modes.every((m) => m === 'vad')) {
     const V = window.EchoVadCore;
     return `cut at pauses (${V.SILENCE_MS} ms quiet, max ${V.MAX_CHUNK_MS / 1000} s)`;
@@ -1955,10 +2356,12 @@ function describeChunking() {
 function renderDiagnostics() {
   const rows = [
     ['Listening', listening ? 'yes' : 'no'],
+    ['Speech-to-text', SttCore.describeProvider(sttProvider)],
     ['Groq key', describeKeySource(keyStatus.groqSource)],
     ['Gemini key', describeKeySource(keyStatus.geminiSource)],
+    ['Deepgram key', describeKeySource(keyStatus.deepgramSource)],
     ['Models', modelsText || '?'],
-    ['Network', aiOffline ? "can't reach Groq/Gemini" : 'ok'],
+    ['Network', aiOffline ? "can't reach a provider" : 'ok'],
     ['System audio', systemRecorder ? 'capturing' : 'off'],
     ['Audio chunks', describeChunking()],
     ['Speech end → first answer word', describeLatency()],
@@ -1977,7 +2380,7 @@ function renderDiagnostics() {
   diagnosticsEventsEl.innerHTML = '';
   if (!diagEvents.length) {
     const li = document.createElement('li');
-    li.textContent = 'No Groq/Gemini calls yet.';
+    li.textContent = 'No provider calls yet.';
     diagnosticsEventsEl.appendChild(li);
   }
   for (const ev of diagEvents) {

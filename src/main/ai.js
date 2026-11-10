@@ -12,6 +12,7 @@
 // provider's short error status (e.g. RESOURCE_EXHAUSTED) are ever logged.
 
 const keyStore = require('./keyStore');
+const deepgramCore = require('./deepgram-core');
 const { humanizeAnswer, createStreamHumanizer } = require('./humanize');
 
 const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
@@ -57,7 +58,9 @@ function aiError(code, message, status) {
 }
 
 function providerLabel(provider) {
-  return provider === 'groq' ? 'Groq' : 'Gemini';
+  if (provider === 'groq') return 'Groq';
+  if (provider === 'deepgram') return 'Deepgram';
+  return 'Gemini';
 }
 
 function missingKeyError(provider) {
@@ -129,6 +132,15 @@ function httpError(provider, res, info) {
       s
     );
   }
+  if (s === 402) {
+    return aiError(
+      'NO_CREDIT',
+      provider === 'deepgram'
+        ? 'Your Deepgram account is out of credit -- add credit at console.deepgram.com, or switch Speech-to-text back to Groq in Settings.'
+        : `${label} says this account needs billing or credit (HTTP 402).`,
+      s
+    );
+  }
   if (s === 429) {
     return aiError(
       'RATE_LIMIT',
@@ -136,7 +148,7 @@ function httpError(provider, res, info) {
       s
     );
   }
-  if (s === 404) {
+  if (s === 404 && provider !== 'deepgram') {
     const model = provider === 'groq' ? groqModel() : geminiModel();
     const envVar = provider === 'groq' ? 'GROQ_STT_MODEL' : 'GEMINI_MODEL';
     return aiError(
@@ -915,15 +927,27 @@ async function summarizeSession({ transcript }) {
 
 // =====================================================================
 // Key check (Settings > "Test keys"): cheap read-only calls that cost no
-// tokens -- list Groq models, fetch the configured Gemini model's metadata.
+// tokens or audio minutes -- list Groq models, fetch the configured Gemini
+// model's metadata, list the Deepgram key's projects.
 // =====================================================================
+function testSuccessMessage(provider) {
+  if (provider === 'gemini') return `Works (model ${geminiModel()}).`;
+  if (provider === 'deepgram') return `Works (model ${deepgramCore.cleanModel(process.env.DEEPGRAM_MODEL)}).`;
+  return `Works (model ${groqModel()}).`;
+}
+
 async function testOne(provider) {
   const apiKey = keyStore.getKey(provider);
-  if (!apiKey) return { ok: false, message: 'Not set.' };
+  if (!apiKey) return { ok: false, set: false, message: 'Not set.' };
   try {
     let res;
     try {
-      if (provider === 'groq') {
+      if (provider === 'deepgram') {
+        res = await fetch(deepgramCore.DEEPGRAM_PROJECTS_URL, {
+          headers: deepgramCore.authHeaders(apiKey),
+          signal: AbortSignal.timeout(KEY_TEST_TIMEOUT_MS),
+        });
+      } else if (provider === 'groq') {
         res = await fetch(GROQ_MODELS_URL, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(KEY_TEST_TIMEOUT_MS),
@@ -941,15 +965,15 @@ async function testOne(provider) {
     if (!res.ok) throw httpError(provider, res, await readProviderError(res));
     // Drain the body; we only care that the call succeeded.
     await res.text().catch(() => '');
-    return { ok: true, message: provider === 'gemini' ? `Works (model ${geminiModel()}).` : `Works (model ${groqModel()}).` };
+    return { ok: true, set: true, message: testSuccessMessage(provider) };
   } catch (err) {
-    return { ok: false, message: err.message || 'Check failed.' };
+    return { ok: false, set: true, code: err.code, message: err.message || 'Check failed.' };
   }
 }
 
 async function testKeys() {
-  const [groq, gemini] = await Promise.all([testOne('groq'), testOne('gemini')]);
-  return { groq, gemini };
+  const [groq, gemini, deepgram] = await Promise.all([testOne('groq'), testOne('gemini'), testOne('deepgram')]);
+  return { groq, gemini, deepgram };
 }
 
 module.exports = {
@@ -958,6 +982,7 @@ module.exports = {
   askFollowUp,
   summarizeSession,
   testKeys,
+  testOne,
   groqModel,
   geminiModel,
   // Pure helpers, exported for main.js validation and the unit tests.

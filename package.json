@@ -1,9 +1,9 @@
 {
   "name": "echo-open",
   "productName": "Echo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Open-source, bring-your-own-keys desktop overlay that transcribes mic + system audio (Groq Whisper) and suggests answers (Google Gemini) during interviews and meetings.",
+  "description": "Open-source, bring-your-own-keys desktop overlay that transcribes mic + system audio (Groq Whisper, or Deepgram Nova-3 live) and suggests answers (Google Gemini) during interviews and meetings.",
   "license": "MIT",
   "author": "conoorsheedy-oss",
   "repository": {
@@ -19,17 +19,18 @@
     "transcription",
     "whisper",
     "groq",
+    "deepgram",
     "gemini",
     "meeting-assistant",
     "interview-practice"
   ],
   "main": "src/main/main.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/gesture-core.test.js test/ai-answers.test.js test/vad-core.test.js",
+    "test": "node --test test/gesture-core.test.js test/ai-answers.test.js test/vad-core.test.js test/deepgram-core.test.js test/deepgram-stream.test.js test/pcm-core.test.js test/stt-core.test.js",
     "gestures:fetch": "node scripts/fetch-gesture-assets.js",
     "postinstall": "node scripts/fetch-gesture-assets.js",
     "predist": "node scripts/fetch-gesture-assets.js --strict",
@@ -37,7 +38,8 @@
     "pack": "electron-builder --dir --publish never"
   },
   "dependencies": {
-    "@mediapipe/tasks-vision": "0.10.35"
+    "@mediapipe/tasks-vision": "0.10.35",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "electron": "^31.7.7",
