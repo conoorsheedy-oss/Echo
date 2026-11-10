@@ -303,7 +303,12 @@ Example of the format (facts made up, never reuse them):
 - **Split into 3 services** over two months
 - **Result** deploys most days, no more Friday pages"`;
 
-const TECHNICAL_STYLE = `\nCoding, maths, probability, puzzles and system design (in either answer style): still open with a one-line spoken summary of the approach (what the user would say first). Then give what's needed to actually solve it: for code, ONE complete, correct code block in the language (and method signature) shown on screen if there is one, nothing left out; for maths/probability, the key steps and the final answer; for design, the core components and the main trade-off in a few short lines. End with one line on time/space complexity where it applies. Keep the words around it short and spoken.`;
+const TECHNICAL_STYLE = `\nCoding, maths, probability, puzzles and system design (in either answer style). These rules override the format rules above for these questions only. Interviewers want to hear HOW the user thinks, not just the final answer, so show the thought process the user can say out loud while working:
+1. Line 1: a one-line spoken summary of the approach (what the user would say first), then a blank line.
+2. A short "thinking out loud" walk-through as a numbered list (3-5 items, each one short spoken line in the user's voice, no long explanations). For code, roughly: what the input/output is and any edge case worth checking; the simple brute-force idea and why it's too slow (with its complexity); the key insight that makes it better; the plan for the final approach. For maths/probability: what's being asked, the setup, then the key steps. For system design: the requirements to confirm, the core components, the main trade-off.
+3. Then what's needed to actually solve it: for code, ONE complete, correct code block in the language (and method signature) shown on screen if there is one, nothing left out; for maths/probability, the final answer with the number; for design, the final design in a few short lines.
+4. End with one line on time/space complexity where it applies, and optionally one line on how to quickly test it with a small example.
+Keep every line plain and spoken (same voice rules as above). In CUES style, keep the numbered steps as short fragments rather than sentences.`;
 
 function normalizeAnswerStyle(style) {
   return typeof style === 'string' && ANSWER_STYLES.has(style) ? style : 'script';
@@ -549,7 +554,7 @@ function supportsThinkingLevel(model) {
 const ANSWER_TOKENS = {
   spoken: 400,
   detailed: 900, // Shorten / Expand / other explicit instructions
-  technical: 2048,
+  technical: 2560, // walk-through steps + full code + complexity
   chat: 1024,
   chatTechnical: 3072,
   summary: 4096,
