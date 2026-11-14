@@ -59,12 +59,16 @@ test('a chunk is cut ~SILENCE_MS after speech ends, with the speech end time', (
   assert.ok(waited >= SILENCE_MS && waited < SILENCE_MS + 3 * FRAME, `cut ${waited} ms after speech`);
 });
 
+test('SILENCE_MS stays above a normal breath and below the old 700 ms', () => {
+  assert.ok(SILENCE_MS > 500 && SILENCE_MS <= 600, `SILENCE_MS ${SILENCE_MS}`);
+});
+
 test('short pauses inside a sentence do not cut it', () => {
   const seg = new VadSegmenter();
   let r = feed(seg, SPEECH, 800, 0);
   r = feed(seg, QUIET, 400, r.t); // a breath
   r = feed(seg, SPEECH, 800, r.t);
-  r = feed(seg, QUIET, 500, r.t); // another, still < SILENCE_MS
+  r = feed(seg, QUIET, 500, r.t); // a longer breath, still < SILENCE_MS (550)
   r = feed(seg, SPEECH, 400, r.t);
   assert.equal(r.events.length, 0);
 });

@@ -1545,6 +1545,13 @@ section.collapsible:not(.collapsed) {
   flex: 0 1 auto;
   min-width: 0;
 }
+.answer-setting input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
 .answer-setting-note {
   margin: var(--sp-4) 0 0;
   font-size: var(--fs-xs);

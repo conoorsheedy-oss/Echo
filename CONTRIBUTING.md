@@ -22,7 +22,7 @@ Add your own Groq + Gemini keys (and optionally Deepgram) in the app (`⋯` menu
 - **Never log secrets:** no keys, request bodies, transcripts or full provider error bodies.
 - **Keep the CSP strict:** no inline scripts or styles, nothing loaded from the network in `index.html`.
 - **New IPC channel?** Add it to `preload.js` and a validating `handle()` in `main.js` (fire-and-forget `send` channels get an `ipcMain.on` that validates and checks the sender, like `stt:stream-audio`).
-- Pure logic goes in small `*-core.js` modules (`vad-core.js`, `pcm-core.js`, `stt-core.js`, `deepgram-core.js`, ...) so it can be unit-tested in plain Node. New test files must be added to the `test` script in `package.json`.
+- Pure logic goes in small `*-core.js` modules (`vad-core.js`, `pcm-core.js`, `stt-core.js`, `question-core.js`, `deepgram-core.js`, ...) so it can be unit-tested in plain Node. New test files must be added to the `test` script in `package.json`.
 - Every `getElementById` must match an element in `index.html`. `gestures.js` clicks real buttons by ID, so don't rename those IDs without updating it.
 - Comments explain *why*, briefly. No heavy dependencies when ~50 lines of plain JS will do.
 

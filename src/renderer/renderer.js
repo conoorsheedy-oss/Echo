@@ -1,8 +1,9 @@
 // Echo overlay UI. Talks to the main process only through window.assistant
-// (preload.js), wrapped below as `api`. vad-core.js, pcm-core.js and
-// stt-core.js load before this file (window.EchoVadCore / EchoPcmCore /
-// EchoSttCore); gestures.js loads after it and uses window.echoGestureBridge
-// (bottom of this file).
+// (preload.js), wrapped below as `api`. vad-core.js, pcm-core.js,
+// stt-core.js and question-core.js load before this file
+// (window.EchoVadCore / EchoPcmCore / EchoSttCore / EchoQuestionCore);
+// gestures.js loads after it and uses window.echoGestureBridge (bottom of
+// this file).
 
 // ---- State ----
 // Audio is cut into chunks at pauses (voice-activity detection, see "Audio
@@ -10,10 +11,11 @@
 // length when Web Audio isn't available.
 const CHUNK_MS = 6000;
 const VAD_MAX_CHUNK_MS = (window.EchoVadCore && window.EchoVadCore.MAX_CHUNK_MS) || 12000;
-// A "?" anywhere, or a question starter at the start of the chunk or after a
-// pause word/punctuation. A chunk can still hold several sentences, so a
-// question often lands mid-chunk ("yeah so, what's your approach here").
-const QUESTION_RE = /\?|(?:^|[.!,;:]\s+|\b(?:and|so|but)\s+)(?:what|why|how|when|where|who|which)(?:'?s)?\b|(?:^|[.!,;:]\s+|\b(?:and|so|but)\s+)(?:can you|could you|would you|do you|did you|have you|are you|is there|tell me|explain|describe)\b/i;
+// Is a "Them" line a question (by wording, not just a "?"), and how long to
+// wait before answering it -- see question-core.js. A chunk can still hold
+// several sentences, so a question often lands mid-chunk ("yeah so, what's
+// your approach here").
+const Question = window.EchoQuestionCore;
 
 let micStream = null;
 let systemStream = null;
@@ -45,13 +47,13 @@ let suggestInFlight = false; // any suggestion request running (header "Thinking
 // stopped talking, and not again for the same question or for a tiny
 // transcript change (fewer than MIN_NEW_THEM_CHARS new characters from them
 // since the last automatic answer). Any new "Them" line restarts the wait.
-//   - A chunk the VAD cut at a pause that ends like a finished sentence
-//     ("?", ".", "!"): the pause itself was the end-of-speech signal, so
-//     fire after just AUTO_SUGGEST_AFTER_SPEECH_MS.
-//   - Anything else (trailing off "...", a mid-speech cut, fixed chunks):
-//     wait AUTO_SUGGEST_QUIET_MS for more.
-const AUTO_SUGGEST_AFTER_SPEECH_MS = 300;
-const AUTO_SUGGEST_QUIET_MS = 1500;
+// The wait itself is Question.autoSuggestDelay():
+//   - Deepgram heard the end of a question (speech_final): right away.
+//   - A question the VAD cut at a pause (Groq): 150 ms.
+//   - Another finished sentence at a pause: 300 ms.
+//   - Anything else (trailing off "...", "and the", a mid-speech cut, fixed
+//     chunks): wait AUTO_SUGGEST_QUIET_MS for more.
+const AUTO_SUGGEST_QUIET_MS = Question.QUIET_MS;
 const MIN_NEW_THEM_CHARS = 12;
 // Two "Them" lines this close together count as one question ("Re: ..." line).
 const QUESTION_JOIN_MS = 10000;
@@ -353,7 +355,7 @@ function syncSttProviderUI() {
   deepgramKeyOptional.classList.toggle('hidden', dg);
   sttProviderNote.textContent = dg
     ? 'Words appear live as people talk, and answers start sooner. Needs a Deepgram key. If Deepgram fails, Echo falls back to Groq when a Groq key is set.'
-    : 'Audio is sent in short clips at natural pauses (about 0.7 s after someone stops). Free with a Groq key.';
+    : 'Audio is sent in short clips at natural pauses (about half a second after someone stops). Free with a Groq key.';
 }
 
 function setSttProvider(value) {
@@ -481,20 +483,14 @@ compactBtn.addEventListener('click', () => {
 });
 
 // ---- Transcript ----
-// meta (from the recorder): { cut: 'silence' | 'max' | 'timer', speechEndAt }
+// meta (from the recorder): { cut: 'silence' | 'max' | 'timer', speechEndAt, live }
 //   cut = why the chunk ended; speechEndAt = performance.now() of the last
-//   voiced audio in it (for the latency stat in Diagnostics).
+//   voiced audio in it (for the latency stat in Diagnostics); live = a
+//   Deepgram final at end of speech.
 let lastThemChunk = null; // { speechEndAt, transcribedAt }
 
-// The chunk ended at a pause and reads like a finished sentence.
-function endedAtPause(text, meta) {
-  if (!meta || meta.cut !== 'silence') return false;
-  const t = text.trim();
-  return /[?.!]["')\]]*$/.test(t) && !/(\.\.\.|…)["')\]]*$/.test(t);
-}
-
 function autoSuggestDelay(text, meta) {
-  return endedAtPause(text, meta) ? AUTO_SUGGEST_AFTER_SPEECH_MS : AUTO_SUGGEST_QUIET_MS;
+  return Question.autoSuggestDelay(text, meta);
 }
 
 function appendLine(speaker, text, meta = null) {
@@ -531,7 +527,7 @@ function appendLine(speaker, text, meta = null) {
   }
 
   // Auto-suggest when the other side seems to have asked a question.
-  if (speaker === 'Them' && QUESTION_RE.test(text.trim())) {
+  if (speaker === 'Them' && Question.looksLikeQuestion(text)) {
     if (/\?\s*$/.test(text.trim()) || (meta && meta.cut === 'silence')) {
       // Ends with "?", or they stopped talking: the question is done.
       scheduleAutoSuggest(delay);
@@ -583,7 +579,10 @@ function clearInterimLines() {
 }
 
 // Deepgram said they've stopped talking (UtteranceEnd after a line that was
-// cut for length): the question that was waiting for its second half is done.
+// cut for length, or after a line that trailed off): the question that was
+// waiting for its second half -- or a 1.5 s "maybe there's more" wait -- is
+// done, so answer now. UtteranceEnd comes ~1 s after the last word: it's the
+// fallback for when speech_final didn't settle it.
 function handleEndOfSpeech(speaker, speechEndAt) {
   if (speaker !== 'Them') return;
   if (lastThemChunk) lastThemChunk = { speechEndAt, transcribedAt: performance.now() };
@@ -591,9 +590,9 @@ function handleEndOfSpeech(speaker, speechEndAt) {
     awaitingNextThemLine = false;
     clearTimeout(pendingQuestionTimer);
     pendingQuestionTimer = null;
-    scheduleAutoSuggest(AUTO_SUGGEST_AFTER_SPEECH_MS);
+    scheduleAutoSuggest(Question.LIVE_QUESTION_DELAY_MS);
   } else if (autoSuggestTimer) {
-    scheduleAutoSuggest(AUTO_SUGGEST_AFTER_SPEECH_MS);
+    scheduleAutoSuggest(Question.LIVE_QUESTION_DELAY_MS);
   }
 }
 
@@ -1442,8 +1441,14 @@ api.onSttEvent((ev) => {
       if (!text) break;
       transcribeFailures = 0;
       // endOfSpeech = Deepgram heard the pause (speech_final / UtteranceEnd):
-      // to the auto-suggest logic that's the same as a VAD cut at a pause.
-      appendLine(speaker, text, { cut: ev.endOfSpeech ? 'silence' : 'max', speechEndAt: speechEndAt() });
+      // to the auto-suggest logic that's the same as a VAD cut at a pause,
+      // except a question fires straight away (live: no extra wait -- the
+      // 300 ms endpointing pause already happened).
+      appendLine(speaker, text, {
+        cut: ev.endOfSpeech ? 'silence' : 'max',
+        live: !!ev.endOfSpeech,
+        speechEndAt: speechEndAt(),
+      });
       break;
     }
     case 'end-of-speech':
@@ -1783,10 +1788,34 @@ api.onContentProtectionChanged((enabled) => {
 //   There is deliberately no timer/hover-based auto-swap: an idle timer
 //   can't tell "reading" from "looked away", and a surprise swap
 //   mid-sentence is the thing this avoids.
+//   The chip appears as soon as the background answer has its first line
+//   (instant first line, or the full answer's first words), not only when
+//   it has finished; clicking it then hands the panel to that answer, which
+//   keeps streaming in.
 // No motion on the answer itself: no dimming while generating (the header
 // "Thinking" pill says that), no flash on arrival, and the scroll position
 // only resets when an answer the user asked for starts streaming in (or the
 // chip is clicked).
+//
+// INSTANT FIRST LINE (Settings > Answers, default on): main runs a tiny
+// parallel Gemini call that writes only the first sentence to say
+// (suggest-pipeline.js); its text arrives as 'ai:chunk' events with
+// part: 'headline'. Handoff to the full answer (streamView below):
+//   1. The headline shows in the big first-line slot (p.headline) as soon as
+//      it arrives -- for a request that owns the panel.
+//   2. The full answer streams in behind it, invisibly, until ITS OWN first
+//      sentence is complete (or its first line is code / a list).
+//   3. Then, in one frame, the full answer takes over: its first sentence
+//      replaces the headline text in the same slot, and its body appears
+//      below. Nothing was below the headline before, so nothing moves down
+//      -- the only change is that one line's wording.
+//   Why swap instead of keeping the headline on top of the full answer's
+//   body: the full answer's body follows from its own first sentence (for a
+//   coding answer it's the approach the code below implements), and what's
+//   on screen then matches Copy / Shorten / Expand / history exactly. The
+//   full answer is always the source of truth.
+//   If the full answer's first words arrive before any headline, the
+//   headline is dropped (main aborts it; anything late is ignored here).
 // Two copies of the chip: label row (full view) and header (compact bar).
 const newAnswerChips = [document.getElementById('new-answer-chip'), document.getElementById('new-answer-chip-compact')];
 
@@ -1794,6 +1823,7 @@ let shownAnswer = null; // last finished answer put on screen: { text, question,
 let panelState = 'empty'; // 'empty' | 'answer' | 'streaming'
 let panelOwnerId = null; // the request currently allowed to write into the panel
 let pendingAnswer = null; // finished background answer waiting behind the chip
+let pendingStreamReq = null; // background answer still streaming, but with a first line ready
 let renderedSource = null; // markdown source currently rendered in #suggestion-text
 const suggestRequests = new Map(); // requestId -> request state
 let requestCounter = 0;
@@ -1822,13 +1852,46 @@ function showSuggestionError(message) {
 
 // Headline-first: the first sentence is rendered big (renderSuggestionHtml);
 // Script answers then show one sentence per line, Cues answers a short list.
-function renderAnswerText(text, style) {
+// source: 'answer' (the real answer) or 'headline' (instant first line only).
+function renderAnswerText(text, style, source = 'answer') {
   const s = style === 'cues' ? 'cues' : 'script';
-  const key = `${s}\u0000${text}`;
+  const key = `${s}\u0000${source}\u0000${text}`;
   if (renderedSource === key) return;
   renderedSource = key;
   suggestionText.dataset.style = s;
+  suggestionText.dataset.source = source;
   suggestionText.innerHTML = safeRenderSuggestion(text, s);
+}
+
+// The instant first line, as shown: its first sentence only, no wrapping quotes.
+function headlineSentence(raw) {
+  const src = toRenderableString(raw).replace(/\r\n/g, '\n').replace(/^\s+/, '');
+  const line = (src.split('\n')[0] || '').replace(/^["'“‘]+/, '');
+  const end = firstSentenceEnd(line);
+  return (end === -1 ? line : line.slice(0, end)).replace(/["'”’]+$/, '').trim();
+}
+
+// Has the full answer got a complete first unit to replace the headline
+// with? Its first sentence (followed by more text), its first line, or a
+// first line that is code / a list (no sentence to wait for).
+function fullFirstLineReady(buffer) {
+  const src = toRenderableString(buffer).replace(/\r\n/g, '\n').replace(/^\s+/, '');
+  if (!src) return false;
+  const nl = src.indexOf('\n');
+  const firstLine = nl === -1 ? src : src.slice(0, nl);
+  if (NON_PROSE_LINE_RE.test(firstLine) || nl !== -1) return true;
+  return firstSentenceEnd(firstLine) !== -1;
+}
+
+// What a streaming request should show right now: { source, text } or null.
+function streamView(req) {
+  const headline = req.headline ? headlineSentence(req.headline) : '';
+  if (req.buffer.trim() && (req.fullShown || !headline || fullFirstLineReady(req.buffer))) {
+    req.fullShown = true;
+    return { source: 'answer', text: req.buffer };
+  }
+  if (!req.fullShown && headline) return { source: 'headline', text: headline };
+  return null;
 }
 
 function showGrounding(groundingFiles) {
@@ -1878,7 +1941,9 @@ function restorePanel() {
 
 function renderStreamFrame(req) {
   req.frameQueued = false;
-  if (req.superseded || panelOwnerId !== req.id || !req.buffer) return;
+  if (req.superseded || panelOwnerId !== req.id) return;
+  const view = streamView(req);
+  if (!view) return;
   if (!req.started) {
     // First words of an answer the user asked for (or of the first answer):
     // only now does the old answer leave the screen.
@@ -1893,21 +1958,49 @@ function renderStreamFrame(req) {
     showGrounding(undefined);
     suggestionBodyEl.scrollTop = 0;
   }
-  // Text only ever grows at the end, so what's above doesn't move.
-  renderAnswerText(req.buffer, req.answerStyle);
+  // Text only ever grows at the end, so what's above doesn't move (the one
+  // exception: the headline -> full answer handoff described above).
+  renderAnswerText(view.text, req.answerStyle, view.source);
+}
+
+function syncNewAnswerChips() {
+  const show = !!(pendingAnswer || pendingStreamReq);
+  newAnswerChips.forEach((chip) => chip.classList.toggle('hidden', !show));
 }
 
 function showPendingAnswer(answer) {
   pendingAnswer = answer;
-  newAnswerChips.forEach((chip) => chip.classList.remove('hidden'));
+  syncNewAnswerChips();
+}
+
+// A background answer has its first line: offer it now (latest wins).
+function showPendingStream(req) {
+  pendingStreamReq = req;
+  syncNewAnswerChips();
+}
+
+function dropPendingStream(req) {
+  if (pendingStreamReq !== req) return;
+  pendingStreamReq = null;
+  syncNewAnswerChips();
 }
 
 function clearPendingAnswer() {
   pendingAnswer = null;
-  newAnswerChips.forEach((chip) => chip.classList.add('hidden'));
+  pendingStreamReq = null;
+  syncNewAnswerChips();
 }
 
 newAnswerChips.forEach((chip) => chip.addEventListener('click', () => {
+  const req = pendingStreamReq;
+  if (req && !req.superseded && suggestRequests.get(req.id) === req) {
+    // Still streaming: hand it the panel; the rest streams straight in.
+    clearPendingAnswer();
+    panelOwnerId = req.id;
+    req.started = false;
+    renderStreamFrame(req);
+    return;
+  }
   if (!pendingAnswer) return;
   const answer = pendingAnswer;
   clearPendingAnswer();
@@ -1991,14 +2084,36 @@ answerStyleChip.addEventListener('click', () => {
     : 'Answer style: Script (full sentences). Applies from the next answer.', 2500);
 });
 
+// ---- Instant first line (Settings > Answers) ----
+// One extra, tiny Gemini call per suggestion (see INSTANT FIRST LINE above).
+// On by default; off saves free-tier quota.
+const INSTANT_HEADLINE_KEY = 'echo.instantHeadline';
+const instantHeadlineToggle = document.getElementById('instant-headline-toggle');
+try {
+  instantHeadlineToggle.checked = localStorage.getItem(INSTANT_HEADLINE_KEY) !== '0';
+} catch (err) {
+  instantHeadlineToggle.checked = true;
+}
+instantHeadlineToggle.addEventListener('change', () => {
+  try { localStorage.setItem(INSTANT_HEADLINE_KEY, instantHeadlineToggle.checked ? '1' : '0'); } catch (err) { /* not remembered -- fine */ }
+});
+function instantHeadlineEnabled() {
+  return instantHeadlineToggle.checked;
+}
+
 // ---- Latency stat (Diagnostics): end of their speech -> first answer word ----
 // Measured from the last voiced audio of the latest "Them" chunk (VAD) to
-// the first streamed token of the suggestion that followed it. Includes the
-// silence wait, upload + transcription, the auto-suggest delay and Gemini's
-// time to first token.
+// the first streamed token of the suggestion that followed it -- from either
+// call (instant first line or full answer), whichever came first. Includes
+// the silence wait, upload + transcription, the auto-suggest delay and
+// Gemini's time to first token. Each sample also keeps the split:
+//   sendMs      end of speech -> request sent
+//   headlineMs  request sent -> first instant-first-line token (null: off / dropped / failed)
+//   answerMs    request sent -> first full-answer token
 const LATENCY_SAMPLES = 10;
 const LATENCY_WINDOW_MS = 30_000; // older speech isn't what the answer is responding to
-const latencySamples = []; // { totalMs, sttMs, auto }
+const latencySamples = []; // { totalMs, sttMs, sendMs, headlineMs, answerMs, via, auto }
+let lastTiming = null; // the same split for the latest request, timed from speech or not
 
 function latencyStartFor() {
   if (!lastThemChunk) return null;
@@ -2006,16 +2121,35 @@ function latencyStartFor() {
   return { ...lastThemChunk };
 }
 
-function noteFirstToken(req) {
-  if (req.firstTokenAt) return;
-  req.firstTokenAt = performance.now();
-  if (!req.latencyFrom) return;
-  latencySamples.push({
-    totalMs: Math.max(0, Math.round(req.firstTokenAt - req.latencyFrom.speechEndAt)),
-    sttMs: Math.max(0, Math.round(req.latencyFrom.transcribedAt - req.latencyFrom.speechEndAt)),
-    auto: req.auto,
-  });
-  if (latencySamples.length > LATENCY_SAMPLES) latencySamples.shift();
+function msBetween(from, to) {
+  return Number.isFinite(from) && Number.isFinite(to) ? Math.max(0, Math.round(to - from)) : null;
+}
+
+// part: 'headline' | 'answer' (a non-streamed answer counts as 'answer').
+function noteFirstToken(req, part = 'answer') {
+  const now = performance.now();
+  if (part === 'headline' && !req.firstHeadlineAt) req.firstHeadlineAt = now;
+  if (part === 'answer' && !req.firstAnswerAt) req.firstAnswerAt = now;
+  if (!req.timing) {
+    // The first token from either call: that's when there's something to say.
+    req.firstTokenAt = now;
+    req.timing = {
+      totalMs: req.latencyFrom ? msBetween(req.latencyFrom.speechEndAt, now) : null,
+      sttMs: req.latencyFrom ? msBetween(req.latencyFrom.speechEndAt, req.latencyFrom.transcribedAt) : null,
+      sendMs: req.latencyFrom ? msBetween(req.latencyFrom.speechEndAt, req.sentAt) : null,
+      headlineMs: null,
+      answerMs: null,
+      via: part,
+      auto: req.auto,
+    };
+    lastTiming = req.timing;
+    if (req.timing.totalMs !== null) {
+      latencySamples.push(req.timing);
+      if (latencySamples.length > LATENCY_SAMPLES) latencySamples.shift();
+    }
+  }
+  req.timing.headlineMs = msBetween(req.sentAt, req.firstHeadlineAt);
+  req.timing.answerMs = msBetween(req.sentAt, req.firstAnswerAt);
   if (!diagnosticsOverlay.classList.contains('hidden')) renderDiagnostics();
 }
 
@@ -2023,17 +2157,38 @@ function describeLatency() {
   if (!latencySamples.length) return 'no timed answers yet';
   const last = latencySamples[latencySamples.length - 1];
   const avg = Math.round(latencySamples.reduce((n, x) => n + x.totalMs, 0) / latencySamples.length);
-  return `last ${last.totalMs} ms (${last.auto ? 'auto' : 'manual'}, of which speech-to-text ${last.sttMs} ms) · avg of last ${latencySamples.length}: ${avg} ms`;
+  const via = last.via === 'headline' ? 'instant first line' : 'full answer';
+  return `last ${last.totalMs} ms (${last.auto ? 'auto' : 'manual'}, via ${via}; speech-to-text ${last.sttMs} ms) · avg of last ${latencySamples.length}: ${avg} ms`;
+}
+
+function describeTimingSplit() {
+  const t = lastTiming;
+  if (!t) return 'no answers yet';
+  const fmt = (ms) => (ms === null ? '--' : `${ms} ms`);
+  return `speech end → request ${fmt(t.sendMs)} · request → first line ${t.headlineMs === null ? (instantHeadlineEnabled() ? '-- (none / dropped)' : '-- (off)') : `${t.headlineMs} ms`} · request → full answer ${fmt(t.answerMs)}`;
 }
 
 // Streamed text for suggestions and chat answers (see main.js 'ai:chunk').
+// payload.part: 'answer' (default) or 'headline' (instant first line).
 const chatRequests = new Map(); // requestId -> chat request state
 api.onAiChunk((payload) => {
   if (!payload || typeof payload.text !== 'string') return;
   const req = suggestRequests.get(payload.requestId) || chatRequests.get(payload.requestId);
   if (!req || req.superseded) return;
-  if (req.kind === 'suggest') noteFirstToken(req);
-  req.buffer += payload.text;
+  if (req.kind !== 'suggest') {
+    req.buffer += payload.text;
+    req.onChunk();
+    return;
+  }
+  if (payload.part === 'headline') {
+    // Too late (the full answer is already writing) or turned off: drop it.
+    if (!req.useHeadline || (req.buffer && !req.headline)) return;
+    req.headline += payload.text;
+    noteFirstToken(req, 'headline');
+  } else {
+    req.buffer += payload.text;
+    noteFirstToken(req, 'answer');
+  }
   req.onChunk();
 });
 
@@ -2068,16 +2223,25 @@ async function requestSuggestion(instruction, opts = {}) {
       r.superseded = true;
       suggestRequests.delete(r.id);
       if (panelOwnerId === r.id) panelOwnerId = null;
+      dropPendingStream(r);
     }
   }
 
   const id = newRequestId('s');
   const req = {
-    id, kind: 'suggest', auto, questionLine, buffer: '', started: false, frameQueued: false, superseded: false,
+    id, kind: 'suggest', auto, questionLine, buffer: '', headline: '', fullShown: false,
+    started: false, frameQueued: false, superseded: false,
     answerStyle: currentAnswerStyle(), latencyFrom: latencyStartFor(), firstTokenAt: null,
+    useHeadline: instantHeadlineEnabled(), sentAt: null, firstHeadlineAt: null, firstAnswerAt: null, timing: null,
   };
   req.onChunk = () => {
-    if (panelOwnerId !== id || req.frameQueued) return; // buffered: nothing on screen changes
+    if (panelOwnerId !== id) {
+      // Buffered behind the visible answer: nothing on screen changes, but
+      // once it has a first line the "New answer ready" chip offers it.
+      if (!req.superseded && pendingStreamReq !== req && streamView(req)) showPendingStream(req);
+      return;
+    }
+    if (req.frameQueued) return;
     req.frameQueued = true;
     requestAnimationFrame(() => renderStreamFrame(req));
   };
@@ -2090,7 +2254,7 @@ async function requestSuggestion(instruction, opts = {}) {
 
   try {
     const shots = screenshotsForSend();
-    const result = await api.generateSuggestion({
+    const payload = {
       requestId: id,
       kind: auto ? 'auto' : 'explicit',
       transcript: buildTranscriptText(),
@@ -2101,7 +2265,10 @@ async function requestSuggestion(instruction, opts = {}) {
       quality: currentQuality(),
       answerStyle: req.answerStyle,
       images: shots.images,
-    });
+      headline: req.useHeadline,
+    };
+    req.sentAt = performance.now();
+    const result = await api.generateSuggestion(payload);
     // They reached Gemini -- clear them unless "Keep screenshots" is on
     // (even if a newer request superseded this one's answer).
     screenshotsSent(shots.ids);
@@ -2117,9 +2284,11 @@ async function requestSuggestion(instruction, opts = {}) {
       groundingFiles: isObj ? result.groundingFiles : undefined,
       style: (isObj && result.answerStyle) || req.answerStyle,
     };
+    dropPendingStream(req);
     if (panelOwnerId === id) displayAnswer(answer, { resetScroll: !req.started });
     else showPendingAnswer(answer);
   } catch (err) {
+    dropPendingStream(req);
     if (req.superseded || err.code === 'ABORTED') return;
     if (panelOwnerId === id) {
       if (req.started) restorePanel();
@@ -2365,6 +2534,8 @@ function renderDiagnostics() {
     ['System audio', systemRecorder ? 'capturing' : 'off'],
     ['Audio chunks', describeChunking()],
     ['Speech end → first answer word', describeLatency()],
+    ['Last answer timing', describeTimingSplit()],
+    ['Instant first line', instantHeadlineEnabled() ? 'on' : 'off'],
     ['Privacy mode', privacyModeEnabled ? 'on' : 'off'],
     ['Compact bar', compactMode ? 'on' : 'off'],
     ['Transcript lines', String(transcriptLines.length)],

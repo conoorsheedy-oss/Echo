@@ -15,8 +15,10 @@ contextBridge.exposeInMainWorld('assistant', {
   onSttEvent: (cb) => ipcRenderer.on('stt:stream-event', (_e, payload) => cb(payload)),
   // payload.images: optional array (max 4) of { mimeType, base64, name } screenshots.
   // payload.requestId (optional, [A-Za-z0-9_-]{1,64}): text streams back as
-  // onAiChunk({ requestId, text }) events; the promise resolves with the full
-  // answer when done (or rejects on error / when superseded).
+  // onAiChunk({ requestId, part, text }) events (part: 'answer', or
+  // 'headline' for the instant first line when payload.headline is true);
+  // the promise resolves with the full answer when done (or rejects on
+  // error / when superseded).
   generateSuggestion: (payload) => ipcRenderer.invoke('ai:suggest', payload),
   askFollowUp: (payload) => ipcRenderer.invoke('ai:ask', payload),
   onAiChunk: (cb) => ipcRenderer.on('ai:chunk', (_e, payload) => cb(payload)),

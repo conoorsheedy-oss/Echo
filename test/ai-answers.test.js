@@ -56,6 +56,11 @@ function sseResponse(pieces, { signal, hang = false } = {}) {
   return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
 }
 
+// All text parts of the user turn, in order (context, then LATEST after any images).
+function promptText(call) {
+  return call.body.contents[0].parts.filter((p) => typeof p.text === 'string').map((p) => p.text).join('\n\n');
+}
+
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
 }
@@ -234,7 +239,9 @@ test('thinking level: Auto by mode + question, Fast = low, Max = high', () => {
   assert.equal(lvl('interview', 'Why do you want to work here?'), 'low');
   assert.equal(lvl('interview', 'Tell me about a time you disagreed with your manager.'), 'low');
   assert.equal(lvl('interview', 'Can you reverse a linked list in place?'), 'high');
-  assert.equal(lvl('interview', 'What is the time complexity of your approach?'), 'high');
+  // A follow-up about existing code is NOT a new problem: low (fast).
+  assert.equal(lvl('interview', 'What is the time complexity of your approach?'), 'low');
+  assert.equal(lvl('interview', 'Why did you use a hash map instead of an array?'), 'low');
   assert.equal(lvl('interview', 'What is the probability of rolling two sixes with two dice?'), 'high');
   assert.equal(lvl('interview', 'How would you design a URL shortener at scale?'), 'high');
   assert.equal(lvl('interview', 'Here is a brain teaser for you.'), 'high');
@@ -359,7 +366,7 @@ test('prompt carries the whole transcript, earlier answers, and the latest quest
     ],
     onChunk: () => {},
   });
-  const prompt = calls[0].body.contents[0].parts[0].text;
+  const prompt = promptText(calls[0]);
   assert.ok(prompt.includes('You: turn 0'), 'oldest line included (no recent-window slicing)');
   assert.ok(prompt.includes('Them: turn 299'));
   assert.ok(prompt.includes('I build backend systems.') && prompt.includes('They want depth.'));
@@ -374,7 +381,7 @@ test('a huge transcript is trimmed in the prompt with the marker', async () => {
   const calls = mockFetch((call) => sseResponse([textEvent('Ok.', 'STOP')], { signal: call.init.signal }));
   const big = Array.from({ length: 4000 }, (_, i) => `Them: sentence number ${i} ${'z'.repeat(30)}`).join('\n');
   await ai.askFollowUp({ transcript: big, question: 'What did they ask last?', mode: 'meeting', onChunk: () => {} });
-  const prompt = calls[0].body.contents[0].parts[0].text;
+  const prompt = promptText(calls[0]);
   assert.ok(prompt.includes(ai.TRANSCRIPT_TRIMMED_MARKER));
   assert.ok(prompt.includes('sentence number 3999 '));
   assert.ok(!prompt.includes('sentence number 0 '));
@@ -509,4 +516,214 @@ test('suggestions arrive humanized, both streamed and final', async () => {
   assert.equal(result.text, 'I cut our build time, from 20 minutes to 6.');
   assert.equal(chunks.join(''), result.text);
   assert.ok(!chunks.join('').includes('Great question'));
+});
+
+// ---- New problem vs follow-up (classifyQuestion) ----
+const NEW_PROBLEMS = [
+  'Can you reverse a linked list in place?',
+  'Write a function to check if a string is a palindrome.',
+  'Given an array of integers and a target, return the indices of the two numbers that add up to the target.',
+  'Implement an LRU cache.',
+  'How would you design a URL shortener at scale?',
+  'Design a rate limiter for our API.',
+  'What is the probability of rolling two sixes with two dice?',
+  "What's the expected value of a single die roll?",
+  'Here is a brain teaser for you.',
+  'In how many ways can you climb a staircase of n steps taking one or two steps at a time?',
+  'Okay, next problem: given a binary tree, find its maximum depth.',
+  "Let's do a coding question. Merge two sorted linked lists.",
+  'So the problem is you have a list of meetings each with a start and end time and you need to figure out the minimum number of rooms required so that no two meetings overlap.',
+  'Find the longest substring without repeating characters.',
+  'Can you write a SQL query that returns the second highest salary?',
+  'Given a string, determine if it is a valid palindrome ignoring punctuation.',
+  'Now implement a function that serializes and deserializes a binary tree.',
+  'Estimate how many piano tuners there are in Chicago.',
+  'I want you to implement a min stack that supports push, pop and get min in constant time.',
+  'Given an unsorted array, find the kth largest element.',
+];
+const FOLLOW_UPS = [
+  'What is the time complexity of your approach?',
+  "What's the time and space complexity?",
+  'Why did you use a hash map instead of an array?',
+  'Can you explain why you used recursion here?',
+  'How would you test this function?',
+  'Any edge cases you would check in your code?',
+  'Can you optimize it to O(n)?',
+  'Is there a better approach than sorting the array?',
+  'Why not use a binary search here?',
+  'Walk me through your code line by line.',
+  'Does your function handle negative numbers in the array?',
+  'What would change if the array was sorted?',
+  'So why did you pick a heap for this?',
+  'Could you explain what the sliding window is doing in your solution?',
+  'What is a hash map?',
+  "What's the difference between an array and a linked list?",
+  'And what about the space complexity of the recursion stack?',
+];
+// Plain-word follow-ups: only follow-ups when the last answer was technical.
+const PLAIN_FOLLOW_UPS = [
+  'What happens if the input is empty?',
+  'How would you handle really large inputs that do not fit in memory with your current approach?',
+  'Okay, what if we need to return all the pairs instead of just one?',
+];
+const BEHAVIOURAL = [
+  'Tell me about yourself.',
+  'Why do you want to work here?',
+  'Tell me about a time you disagreed with your manager.',
+  'What sort of role are you looking for?',
+  'Tell me about a time you had to solve a conflict in your team.',
+  'What are your salary expectations?',
+  'On a scale of 1 to 10, how would you rate your Python?',
+  'What was your biggest challenge in that job from 2020 - 2023?',
+  'Why are you job searching right now?',
+  'Tell me about a time you had to find the root cause of a problem.',
+  "Here's a question for you: what motivates you?",
+  'Given the current market, how do you see your career developing?',
+  'Tell me about a project where you had to design a new process.',
+  'Why did you leave your last job?',
+  'What would you do if a teammate missed a deadline?',
+  'What is the largest team you have led?',
+];
+
+test('classifyQuestion: new problems vs technical follow-ups vs everything else', () => {
+  for (const q of NEW_PROBLEMS) assert.equal(ai.classifyQuestion(q), 'problem', q);
+  for (const q of FOLLOW_UPS) assert.equal(ai.classifyQuestion(q), 'followup', q);
+  for (const q of FOLLOW_UPS) assert.equal(ai.classifyQuestion(q, { hasPriorAnswer: true, priorCode: true }), 'followup', `${q} (after code)`);
+  for (const q of BEHAVIOURAL) {
+    assert.equal(ai.classifyQuestion(q), 'general', q);
+    // ...even straight after a coding answer.
+    assert.equal(ai.classifyQuestion(q, { hasPriorAnswer: true, priorCode: true }), 'general', `${q} (after code)`);
+  }
+  for (const q of PLAIN_FOLLOW_UPS) {
+    assert.equal(ai.classifyQuestion(q), 'general', `${q} (nothing to follow up on)`);
+    assert.equal(ai.classifyQuestion(q, { hasPriorAnswer: true, priorCode: true }), 'followup', `${q} (after code)`);
+  }
+  // Long technical prompts read as problem statements.
+  assert.equal(ai.classifyQuestion('Okay so here we have an array of stock prices and on each day you can either buy or sell one share but you can only hold one share at a time and there is a cooldown of one day after you sell, maximise the profit you can make over all the days in the array'), 'problem');
+  assert.equal(ai.classifyQuestion(''), 'general');
+});
+
+test('classifyQuestion: screenshots mean a new problem unless it is a short follow-up to an earlier answer', () => {
+  assert.equal(ai.classifyQuestion('Walk me through it.', { hasImages: true }), 'problem');
+  assert.equal(ai.classifyQuestion('', { hasImages: true }), 'problem');
+  assert.equal(ai.classifyQuestion('Tell me about yourself.', { hasImages: true }), 'problem');
+  assert.equal(ai.classifyQuestion('Why did you use a hash map?', { hasImages: true }), 'problem', 'no earlier answer: the screenshot is the problem');
+  assert.equal(ai.classifyQuestion('Why did you use a hash map?', { hasImages: true, hasPriorAnswer: true }), 'followup');
+  assert.equal(ai.classifyQuestion("What's the complexity of this?", { hasImages: true, hasPriorAnswer: true }), 'followup');
+  assert.equal(ai.classifyQuestion('Now solve this one.', { hasImages: true, hasPriorAnswer: true }), 'problem');
+});
+
+test('priorContext: knows when the last answers were technical', () => {
+  assert.deepEqual(ai.priorContext(undefined), { hasPriorAnswer: false, priorCode: false });
+  assert.deepEqual(ai.priorContext([{ question: 'Tell me about yourself', text: 'I build things.' }]), { hasPriorAnswer: true, priorCode: false });
+  assert.deepEqual(ai.priorContext([{ question: 'q', text: 'Use a map.\n```py\nx = {}\n```' }]), { hasPriorAnswer: true, priorCode: true });
+  assert.deepEqual(ai.priorContext([{ question: 'Reverse a linked list', text: 'Use two pointers.' }]), { hasPriorAnswer: true, priorCode: true });
+});
+
+test('thinking level: interview problems high, follow-ups and behavioural low, overrides still win', () => {
+  const lvl = (question, extra = {}) => ai.resolveThinkingLevel({ mode: 'interview', question, quality: 'auto', ...extra });
+  for (const q of NEW_PROBLEMS) assert.equal(lvl(q), 'high', q);
+  for (const q of [...FOLLOW_UPS, ...BEHAVIOURAL]) assert.equal(lvl(q), 'low', q);
+  for (const q of FOLLOW_UPS) assert.equal(lvl(q, { quality: 'max' }), 'high', `Max: ${q}`);
+  for (const q of NEW_PROBLEMS) assert.equal(lvl(q, { quality: 'fast' }), 'low', `Fast: ${q}`);
+  assert.equal(ai.resolveThinkingLevel({ mode: 'interview', quality: 'auto', kind: 'problem' }), 'high');
+  assert.equal(ai.resolveThinkingLevel({ mode: 'interview', quality: 'auto', kind: 'followup' }), 'low');
+});
+
+test('output budgets: follow-ups short, problems roomy, thinking headroom never starves the answer', () => {
+  assert.equal(ai.answerTokensFor('general'), ai.ANSWER_TOKENS.spoken);
+  assert.equal(ai.answerTokensFor('followup'), ai.ANSWER_TOKENS.followUp);
+  assert.equal(ai.answerTokensFor('problem'), ai.ANSWER_TOKENS.technical);
+  assert.equal(ai.answerTokensFor('general', 'Make this shorter'), ai.ANSWER_TOKENS.detailed);
+  assert.equal(ai.answerTokensFor('general', 'Rewrite:\n```js\nx\n```'), ai.ANSWER_TOKENS.technical);
+  assert.ok(ai.ANSWER_TOKENS.followUp > ai.ANSWER_TOKENS.spoken && ai.ANSWER_TOKENS.followUp < ai.ANSWER_TOKENS.technical);
+  const H = ai.THINKING_HEADROOM_TOKENS;
+  assert.ok(H.low >= ai.ANSWER_TOKENS.followUp * 2, 'low thinking has room to think about code');
+  assert.ok(H.high >= 8192, 'high thinking keeps generous headroom');
+  assert.ok(H.minimal < H.low && H.low < H.medium && H.medium < H.high);
+});
+
+test('technical follow-up: low thinking, short budget and a "keep it short" hint in LATEST', async () => {
+  const calls = mockFetch((call) => sseResponse([textEvent('Because lookups are O(1).', 'STOP')], { signal: call.init.signal }));
+  const result = await ai.generateSuggestion({
+    transcript: 'Them: Reverse a linked list.\nYou: Sure, I used two pointers.\nThem: What is the time complexity of your approach?',
+    mode: 'interview',
+    question: 'What is the time complexity of your approach?',
+    previousAnswers: [{ kind: 'suggestion', question: 'Reverse a linked list.', text: 'Two pointers.\n```py\ndef rev(h): ...\n```' }],
+    onChunk: () => {},
+  });
+  assert.equal(result.thinkingLevel, 'low');
+  assert.equal(result.questionKind, 'followup');
+  const gc = calls[0].body.generationConfig;
+  assert.equal(gc.thinkingConfig.thinkingLevel, 'low');
+  assert.equal(gc.maxOutputTokens, ai.ANSWER_TOKENS.followUp + ai.THINKING_HEADROOM_TOKENS.low);
+  const latest = calls[0].body.contents[0].parts.at(-1).text;
+  assert.match(latest, /^=== LATEST ===/);
+  assert.match(latest, /FOLLOW-UP/);
+  assert.match(latest, /No numbered walk-through and no full code again/);
+  // The system prompt explains both formats but is the same for every question.
+  const system = calls[0].body.systemInstruction.parts[0].text;
+  assert.match(system, /A\) A NEW problem/);
+  assert.match(system, /B\) A FOLLOW-UP/);
+  assert.equal(system, ai.buildSystemPrompt('interview', 'script'));
+});
+
+test('new problem: high thinking, technical budget and the full-format hint', async () => {
+  const calls = mockFetch((call) => sseResponse([textEvent('Use two pointers.', 'STOP')], { signal: call.init.signal }));
+  const result = await ai.generateSuggestion({
+    transcript: 'Them: Given an array of integers, return the indices of two numbers that add up to a target.',
+    mode: 'interview',
+    question: 'Given an array of integers, return the indices of two numbers that add up to a target.',
+    onChunk: () => {},
+  });
+  assert.equal(result.questionKind, 'problem');
+  const gc = calls[0].body.generationConfig;
+  assert.equal(gc.thinkingConfig.thinkingLevel, 'high');
+  assert.equal(gc.maxOutputTokens, ai.ANSWER_TOKENS.technical + ai.THINKING_HEADROOM_TOKENS.high);
+  assert.match(calls[0].body.contents[0].parts.at(-1).text, /a NEW problem to solve/);
+});
+
+// ---- Prompt layout (caching + "the question is never buried") ----
+test('layout: transcript -> earlier answers -> background -> screenshots -> LATEST last, after the images', async () => {
+  const calls = mockFetch((call) => sseResponse([textEvent('Ok.', 'STOP')], { signal: call.init.signal }));
+  await ai.generateSuggestion({
+    transcript: 'You: hello\nThem: What does this code do?',
+    mode: 'interview',
+    question: 'What does this code do?',
+    previousAnswers: [{ kind: 'suggestion', question: 'hi', text: 'EARLIER-ANSWER' }],
+    knowledgeSnippets: [{ source: 'cv.md', text: 'KNOWLEDGE-SNIPPET' }],
+    images: [{ mimeType: 'image/jpeg', base64: 'AAAA', name: 'VS Code' }, { mimeType: 'image/jpeg', base64: 'BBBB', name: 'Chrome' }],
+    onChunk: () => {},
+  });
+  const parts = calls[0].body.contents[0].parts;
+  assert.equal(parts.length, 4, 'context text, 2 images, LATEST text');
+  assert.equal(parts[1].inline_data.data, 'AAAA');
+  assert.equal(parts[2].inline_data.data, 'BBBB');
+  const context = parts[0].text;
+  const order = ['FULL CONVERSATION SO FAR', 'You: hello', 'EARLIER-ANSWER', 'KNOWLEDGE-SNIPPET', '2 screenshots are attached right below'];
+  const idx = order.map((s) => context.indexOf(s));
+  assert.ok(idx.every((i) => i >= 0), JSON.stringify(idx));
+  assert.deepEqual([...idx].sort((a, b) => a - b), idx, 'blocks in cache-friendly order');
+  assert.ok(!context.includes('=== LATEST ==='));
+  assert.match(parts[3].text, /^=== LATEST ===/);
+  assert.ok(parts[3].text.includes('What does this code do?'));
+});
+
+test('layout: consecutive requests share the whole earlier transcript as a prefix (implicit caching)', () => {
+  const t1 = Array.from({ length: 200 }, (_, i) => `${i % 2 ? 'Them' : 'You'}: line ${i}`).join('\n');
+  const first = ai.buildConversationText({
+    transcript: t1,
+    previousAnswers: [{ kind: 'suggestion', question: 'q1', text: 'answer one' }],
+    knowledgeSnippets: [{ source: 'cv.md', text: 'snippet matched by question one' }],
+    question: 'question one?',
+  });
+  const second = ai.buildConversationText({
+    transcript: `${t1}\nYou: my reply\nThem: question two?`,
+    previousAnswers: [{ kind: 'suggestion', question: 'q1', text: 'answer one' }, { kind: 'suggestion', question: 'q2', text: 'answer two' }],
+    knowledgeSnippets: [{ source: 'notes.md', text: 'a different snippet for question two' }],
+    question: 'question two?',
+  });
+  let shared = 0;
+  while (shared < first.length && first[shared] === second[shared]) shared++;
+  assert.ok(shared >= first.indexOf(t1) + t1.length, `shared prefix (${shared} chars) covers the whole old transcript`);
 });

@@ -29,6 +29,7 @@ const ai = require('./ai');
 const keyStore = require('./keyStore');
 const knowledge = require('./knowledge');
 const { createRequestRegistry } = require('./ai-requests');
+const { runSuggestion } = require('./suggest-pipeline');
 const { createDeepgramManager } = require('./deepgram');
 
 // Optional Deepgram live speech-to-text (Settings > Speech-to-text). The
@@ -748,8 +749,10 @@ ipcMain.on('stt:stream-audio', (evt, speaker, pcm) => {
 // ---- Answers: streaming + cancellation ----
 // Each suggest/ask request carries a renderer-made requestId. While Gemini
 // streams, every piece of text is forwarded as an 'ai:chunk' event
-// ({ requestId, text }); the invoke() promise itself is the "done" (resolves
-// with the full answer) or "error" (rejects) signal.
+// ({ requestId, part, text }; part is 'answer', or 'headline' for the
+// instant first line -- see suggest-pipeline.js); the invoke() promise
+// itself is the "done" (resolves with the full answer) or "error" (rejects)
+// signal.
 //
 // Every request gets its own AbortController (ai-requests.js). A new
 // *explicit* suggestion (Generate / hotkey / Regenerate / Shorten / Expand)
@@ -792,14 +795,24 @@ function validatePreviousAnswers(list) {
   });
 }
 
-function chunkForwarder(evt, requestId) {
+function chunkForwarder(evt, requestId, part = 'answer') {
   if (!requestId) return undefined; // no id: no streaming events
   return (text) => {
-    if (evt.sender && !evt.sender.isDestroyed()) evt.sender.send('ai:chunk', { requestId, text });
+    if (evt.sender && !evt.sender.isDestroyed()) evt.sender.send('ai:chunk', { requestId, part, text });
   };
 }
 
-handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images } = {}) => {
+// suggest-pipeline.js emit(part, text) -> 'ai:chunk' events.
+function partForwarder(evt, requestId) {
+  if (!requestId) return undefined;
+  return (part, text) => {
+    if (evt.sender && !evt.sender.isDestroyed()) evt.sender.send('ai:chunk', { requestId, part, text });
+  };
+}
+
+// headline: Settings > Answers > "Instant first line" (default on). Strict
+// boolean; anything else means off.
+handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images, headline } = {}) => {
   const id = validateRequestId(requestId);
   assertOptionalString(transcript, 'transcript', MAX_TRANSCRIPT_CHARS);
   assertOptionalString(mode, 'mode', 50);
@@ -816,19 +829,23 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
   try {
     const query = question || instruction || extractSearchQuery(transcript);
     const knowledgeSnippets = knowledge.searchKnowledge(query);
-    return await ai.generateSuggestion({
-      transcript,
-      mode,
-      instruction,
-      question,
-      previousAnswers: prior,
-      quality: q,
-      answerStyle: style,
-      images: preparedImages,
-      knowledgeSnippets,
-      // Lets a superseding request actually cancel this HTTP request.
+    return await runSuggestion({
+      ai,
+      params: {
+        transcript,
+        mode,
+        instruction,
+        question,
+        previousAnswers: prior,
+        quality: q,
+        answerStyle: style,
+        images: preparedImages,
+        knowledgeSnippets,
+      },
+      // Lets a superseding request actually cancel both HTTP requests.
       signal: req.signal,
-      onChunk: chunkForwarder(evt, id),
+      emit: partForwarder(evt, id),
+      headline: headline === true,
     });
   } finally {
     req.done();

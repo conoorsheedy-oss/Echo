@@ -53,9 +53,9 @@ You can reopen Settings any time from the `⋯` menu > **API keys**.
 
 ## Using it
 
-- **Start Listening** records your mic and system audio and shows the transcript (`You:` / `Them:`). With Groq (default), speech is sent at natural pauses (about 0.7 s after someone stops talking), and silence is never uploaded. With **Deepgram**, words appear live in a dimmed line that turns into a normal line when the sentence ends. The Mic / System audio dots glow while voice is detected.
-- When they finish a question, an answer starts in **Suggested response** within about a second. The first sentence shows in large text straight away, so you can start talking while the rest arrives. Press **Generate** (`Ctrl+Enter`) to get one any time, even without listening.
-- An automatic answer never replaces the one you're reading: a **New answer ready** chip appears instead. Click it when you're ready.
+- **Start Listening** records your mic and system audio and shows the transcript (`You:` / `Them:`). With Groq (default), speech is sent at natural pauses (about half a second after someone stops talking), and silence is never uploaded. With **Deepgram**, words appear live in a dimmed line that turns into a normal line when the sentence ends. The Mic / System audio dots glow while voice is detected.
+- When they finish a question, a first sentence to say appears in **Suggested response** in large text, usually within about a second (**Instant first line**, see Settings). The full answer follows and takes over that line, with the rest below it, so you can start talking while it arrives. Press **Generate** (`Ctrl+Enter`) to get one any time, even without listening.
+- An automatic answer never replaces the one you're reading: a **New answer ready** chip appears instead, as soon as the new answer has its first line. Click it when you're ready; if the answer is still being written, the rest streams in.
 - Every answer has **Shorten**, **Expand**, **Regenerate** and **Copy**.
 - **Modes** (dropdown next to Start Listening): Interview, Meeting, Presentation, General. Each has its own answer style.
 - **Script / Cues** (chip next to **Suggested response**): **Script** gives full spoken sentences, one per line. **Cues** gives a first line to say, then 3–4 bold keywords to talk around in your own words, which sounds more natural than reading.
@@ -110,10 +110,19 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
   - **Groq Whisper** (free, default): audio is sent in clips cut at pauses, so each line appears shortly after the speaker pauses.
   - **Deepgram Nova-3** (live, faster): audio streams while someone talks and words appear as they're spoken; the end of a question is detected about 0.3 s after they stop. Needs a Deepgram key ($200 free credit, no card; about $0.46 per hour of streamed audio after that, and each side is its own stream). Echo only streams while someone is talking. If Deepgram fails (bad key, out of credit, network), Echo reconnects up to 3 times, then switches to Groq when a Groq key is set.
 - **Quality vs speed** (Settings > Answers) sets how hard Gemini thinks before answering:
-  - **Auto** (default): `high` for coding, maths, probability, puzzle and system-design questions in Interview mode, or when screenshots are attached. Everything else uses `low` for speed.
+  - **Auto** (default): in Interview mode, `high` only for a **new problem to solve**: "write a function...", "given an array...", "design a URL shortener", a maths / probability / puzzle question, a long technical problem statement, or a problem on attached screenshots. **Follow-ups about your code** ("why did you use a hash map?", "what's the complexity?", "what if the input is empty?", "how would you test it?") use `low` and get a short spoken answer (a first line plus 1-3 lines, and at most a tiny snippet of the changed code) instead of the full walk-through. Behavioural questions and the other modes use `low` too.
   - **Fast**: always `low`, quickest answers.
   - **Max**: always `high`, best quality but slower.
 - **Answer style** (Settings > Answers, or the chip): **Script** (default) or **Cues**.
+- **Instant first line** (Settings > Answers, on by default): with every answer, Echo also asks Gemini for just the first sentence to say (a tiny request with minimal thinking and a trimmed context), and shows it as soon as it arrives. When the full answer's own first sentence is ready, it replaces that line in place and the rest appears below; Copy, Shorten, Expand and the answer history always use the full answer. If the full answer is quicker, the first line is skipped. Turn it off to save free-tier quota: it's one extra small Gemini request per answer.
+
+### How Echo keeps answers fast
+
+- **End of speech**: with Deepgram, a question is answered the moment Deepgram reports the speaker has stopped (`speech_final`, about 0.3 s after the last word). With Groq, audio is cut 0.55 s after someone stops and a question is answered 150 ms after it's transcribed. Questions are recognised by their wording ("what's the complexity", "walk me through your code", "write a function...") even without a question mark; a line that trails off ("and the...") waits up to 1.5 s for the rest.
+- **First line first**: the instant first line usually lands well before the full answer, which may still be thinking.
+- **Thinking only where it pays**: `high` thinking is kept for new problems; follow-ups and everything else use `low`.
+- **Prompt order**: the long, growing transcript goes first and the question last, so Gemini can reuse ("implicitly cache") the unchanged start of the prompt between questions.
+- `Ctrl+Shift+D` shows the split for the last answer: end of speech → request sent → first line → first word of the full answer.
 - **Models** (when running from source): copy `.env.example` to `.env` to override them, then restart Echo:
   - `GEMINI_MODEL` (default `gemini-3.5-flash`). Google retires older Flash models, so if answers say the model is unknown, set a current Gemini Flash id from Google AI Studio.
   - `GROQ_STT_MODEL` (default `whisper-large-v3-turbo`).
@@ -152,7 +161,7 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 | Blank or frozen window | Check the terminal you ran `npm start` from for `[renderer ...]` error lines. `Ctrl+Shift+Space` or the tray's **Reset window position** brings a lost window back. |
 | "doesn't know the model" | Set `GEMINI_MODEL` in `.env` to a current Gemini Flash model and restart. |
 
-`Ctrl+Shift+D` opens a diagnostics panel with recent request timings, errors and the "Speech end → first answer word" latency (last value and average). It never shows keys.
+`Ctrl+Shift+D` opens a diagnostics panel with recent request timings, errors, the "Speech end → first answer word" latency (last value and average, counting whichever came first: the instant first line or the full answer) and the split for the last answer (speech end → request, request → first line, request → full answer). It never shows keys.
 
 ## Building the installer
 
@@ -185,6 +194,7 @@ src/
     deepgram.js    Deepgram live WebSockets (one per speaker)
     deepgram-core.js  Deepgram URL, message parsing, errors (pure)
     ai-requests.js cancels stale answer requests
+    suggest-pipeline.js  full answer + parallel instant first line
     keyStore.js    encrypted key storage (+ .env fallback)
     knowledge.js   keyword search over your notes
     env.js         tiny .env loader
@@ -193,6 +203,7 @@ src/
     vad-core.js    voice-activity detection (pure)
     pcm-core.js, pcm-worklet.js    16 kHz PCM for Deepgram
     stt-core.js    which keys the speech-to-text choice needs
+    question-core.js  is a line a question, and how long to wait (pure)
     gesture-core.js, gestures.js   experimental hand gestures
 scripts/         fetch-gesture-assets.js (runs on npm install)
 setup.cmd/.ps1   one-click Windows setup from source

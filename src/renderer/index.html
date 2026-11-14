@@ -254,7 +254,7 @@
               <option value="max">Max quality</option>
             </select>
           </label>
-          <p class="answer-setting-note">Auto thinks harder only on interview coding, maths, probability, puzzle and design questions (or when screenshots are attached) and stays quick everywhere else, behavioural questions included. Fast always answers quickest; Max always thinks hardest (slower).</p>
+          <p class="answer-setting-note">Auto thinks harder only when an interview question is a new problem to solve (write a function, a maths or probability question, a puzzle, design a system, or a problem on attached screenshots). Follow-ups about your code ("why did you use X?", "what's the complexity?", "what if the input is empty?") and behavioural questions stay quick. Fast always answers quickest; Max always thinks hardest (slower).</p>
           <label class="answer-setting" for="answer-style-select">
             <span>Answer style</span>
             <select id="answer-style-select" title="Script: full sentences to say. Cues: a first line to say, then keywords to talk around.">
@@ -263,6 +263,11 @@
             </select>
           </label>
           <p class="answer-setting-note">Script gives you sentences to say, one per line. Cues gives you a first line to say, then 3-4 bold keywords to talk around in your own words. Also switchable with the Script/Cues chip next to "Suggested response".</p>
+          <label class="answer-setting" for="instant-headline-toggle">
+            <span>Instant first line</span>
+            <input type="checkbox" id="instant-headline-toggle" checked title="Show a first sentence to say within about a second, while the full answer is written" />
+          </label>
+          <p class="answer-setting-note">Shows a first sentence to say within about a second, from a tiny extra Gemini request that runs alongside the full answer. When the full answer's own first sentence is ready, it takes over that line and the rest appears below. Turn off to save free-tier quota (one extra small request per answer).</p>
           <p id="model-note" class="answer-setting-note"></p>
         </div>
 
@@ -322,6 +327,7 @@
   <script src="vad-core.js"></script>
   <script src="pcm-core.js"></script>
   <script src="stt-core.js"></script>
+  <script src="question-core.js"></script>
   <script src="renderer.js"></script>
   <script src="gesture-core.js"></script>
   <script src="gestures.js"></script>

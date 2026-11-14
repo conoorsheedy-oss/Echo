@@ -24,6 +24,7 @@ const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 
 const STT_TIMEOUT_MS = 20_000; // a chunk (at most ~12 s of speech) transcribes well within this
 const AI_TIMEOUT_MS = 45_000; // suggestions + chat answers
+const HEADLINE_TIMEOUT_MS = 12_000; // instant first line: useless once the full answer is out
 const SUMMARY_TIMEOUT_MS = 75_000; // a summary covers the whole transcript
 const KEY_TEST_TIMEOUT_MS = 15_000;
 
@@ -259,8 +260,8 @@ const SCREEN_NOTE = `\nOne or more attached screen images may be included (in th
 // Knowledge files are often AI-written CVs: facts yes, wording never.
 const KNOWLEDGE_NOTE = `\nBackground material about the user may be included, pulled from their own CV/notes/project files. Use it ONLY as a source of facts: which projects, employers, tools, numbers and results are real. Never copy its wording or phrasing. CVs and notes are often written in stiff, polished, AI-style language ("spearheaded", "leveraged", "passionate about", "drove cross-functional synergy"), and the user has to sound like themselves talking. Re-say every fact in plain spoken words, the way they'd tell a friend. Prefer these real facts over generic knowledge, and never invent details, projects, or experience beyond what's given there or stated in the transcript.`;
 
-// What every suggest/ask request carries -- see buildConversationText().
-const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You" = the user, "Them" = the other side, oldest first; it is auto-transcribed, so expect small errors), the answers already suggested earlier in this session, and -- at the very end, under "LATEST" -- the last few lines and the question to answer now. Answer the latest question. Use the earlier conversation for continuity: "expand on that" or "going back to earlier" refer to what was said or answered before. Don't repeat an earlier answer word for word; build on it.`;
+// What every suggest/ask request carries -- see buildConversation().
+const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You" = the user, "Them" = the other side, oldest first; it is auto-transcribed, so expect small errors), the answers already suggested earlier in this session, any background and screenshots, and -- at the very end, under "LATEST" -- the last few lines and the question to answer now. Answer the latest question. Use the earlier conversation for continuity: "expand on that" or "going back to earlier" refer to what was said or answered before. Don't repeat an earlier answer word for word; build on it.`;
 
 // Words and patterns that make an answer sound machine-written when said
 // out loud. humanize.js also strips em dashes and stock openers afterwards,
@@ -315,11 +316,13 @@ Example of the format (facts made up, never reuse them):
 - **Split into 3 services** over two months
 - **Result** deploys most days, no more Friday pages"`;
 
-const TECHNICAL_STYLE = `\nCoding, maths, probability, puzzles and system design (in either answer style). These rules override the format rules above for these questions only. Interviewers want to hear HOW the user thinks, not just the final answer, so show the thought process the user can say out loud while working:
+const TECHNICAL_STYLE = `\nCoding, maths, probability, puzzles and system design (in either answer style). There are two kinds of technical question, and they get different formats. These rules override the format rules above for these questions only.
+A) A NEW problem to solve (a coding task, a maths/probability question, a puzzle, "design a system"). Interviewers want to hear HOW the user thinks, not just the final answer, so show the thought process the user can say out loud while working:
 1. Line 1: a one-line spoken summary of the approach (what the user would say first), then a blank line.
 2. A short "thinking out loud" walk-through as a numbered list (3-5 items, each one short spoken line in the user's voice, no long explanations). For code, roughly: what the input/output is and any edge case worth checking; the simple brute-force idea and why it's too slow (with its complexity); the key insight that makes it better; the plan for the final approach. For maths/probability: what's being asked, the setup, then the key steps. For system design: the requirements to confirm, the core components, the main trade-off.
 3. Then what's needed to actually solve it: for code, ONE complete, correct code block in the language (and method signature) shown on screen if there is one, nothing left out; for maths/probability, the final answer with the number; for design, the final design in a few short lines.
 4. End with one line on time/space complexity where it applies, and optionally one line on how to quickly test it with a small example.
+B) A FOLLOW-UP about a solution or code already discussed ("why did you use X", "what if the input is empty", "what's the complexity", "how would you test it", "any edge cases", "can you explain this part"), or a quick conceptual question. Answer it like a person in the room would: the headline sentence with the direct answer, then 1-3 short spoken lines with the reasoning. No numbered walk-through, and don't repeat the full code. Only if the answer changes the code, add one tiny code block with just the changed lines. Use the earlier answers in this session to know what the code is.
 Keep every line plain and spoken (same voice rules as above). In CUES style, keep the numbered steps as short fragments rather than sentences.`;
 
 function normalizeAnswerStyle(style) {
@@ -460,39 +463,66 @@ function buildKnowledgeBlock(knowledgeSnippets) {
   return `\n\nRelevant background about the user, from their own files:\n\n${body}`;
 }
 
-// e.g. "(2 screenshots are attached below ..., in capture order: 1. "VS Code", 2. "Chrome".)"
+// e.g. "(2 screenshots are attached right below, ..., in capture order: 1. "VS Code", 2. "Chrome".)"
 function describeScreenshots(images) {
   if (!images || !images.length) return '';
   if (images.length === 1) {
     const label = images[0].name ? ` ("${images[0].name}")` : '';
-    return `\n\n(A screenshot${label} is attached below for visual context.)`;
+    return `\n\n(A screenshot${label} is attached right below, before the LATEST section, for visual context.)`;
   }
   const names = images.map((im, i) => `${i + 1}. ${im.name ? `"${im.name}"` : 'screen'}`).join(', ');
-  return `\n\n(${images.length} screenshots are attached below for visual context, in capture order: ${names}.)`;
+  return `\n\n(${images.length} screenshots are attached right below, before the LATEST section, for visual context, in capture order: ${names}.)`;
 }
 
-// Layout: full transcript -> earlier answers -> background -> screenshots
-// note -> "=== LATEST ===" (last lines + the question/instruction) LAST, so
-// the thing to answer is never buried above 100k chars of context.
-function buildConversationText({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images }) {
+// Answer-format hint for this one question, placed in LATEST (the system
+// prompt stays identical across requests -- see the layout note below).
+const KIND_HINTS = {
+  problem: 'Question type: a NEW problem to solve. Use the full technical format (spoken summary line, short numbered walk-through, then the complete code or final answer, then complexity).',
+  followup: 'Question type: a FOLLOW-UP about the solution or code already discussed (or a quick conceptual question). Keep it short and spoken: the headline sentence with the direct answer, then 1-3 short lines. No numbered walk-through and no full code again; at most one tiny code block with just the changed lines if the answer changes the code.',
+};
+
+// Layout, built for Gemini's implicit (prefix) caching and for "the question
+// is never buried":
+//   [system instruction]                       identical for every request in a mode/style
+//   1. FULL CONVERSATION SO FAR                append-only -> the long, stable prefix
+//   2. ANSWERS ALREADY GIVEN                   append-only
+//   3. background snippets (knowledge files)   re-ranked per question
+//   4. screenshots note + the screenshots      (separate image parts)
+//   5. "=== LATEST ===" last lines + the question/instruction + format hint
+// The transcript is by far the biggest block and only ever grows at its end,
+// so consecutive requests share everything up to its old end. Blocks that
+// change on (almost) every question -- the knowledge snippets, which are
+// searched with the question itself, and the newest answer -- go after it;
+// putting them first would make the shared prefix stop at the system prompt.
+// Returns { context, latest } text; buildUserParts() puts images between them.
+function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind }) {
   const capped = capTranscript(transcript);
-  let text = `FULL CONVERSATION SO FAR (chronological, oldest first; "You" = the user, "Them" = the other side):\n\n${capped || '(no transcript yet)'}`;
-  text += buildPreviousAnswersBlock(previousAnswers);
-  text += buildKnowledgeBlock(knowledgeSnippets);
-  text += describeScreenshots(images);
-  text += '\n\n=== LATEST ===';
+  let context = `FULL CONVERSATION SO FAR (chronological, oldest first; "You" = the user, "Them" = the other side):\n\n${capped || '(no transcript yet)'}`;
+  context += buildPreviousAnswersBlock(previousAnswers);
+  context += buildKnowledgeBlock(knowledgeSnippets);
+  context += describeScreenshots(images);
+  let latest = '=== LATEST ===';
   const tail = capped ? latestLines(capped) : '';
-  if (tail) text += `\nLast lines of the conversation:\n${tail}`;
-  if (userQuestion) text += `\n\nUser's question to you: ${userQuestion}`;
-  else if (question) text += `\n\nQuestion to answer now (asked by Them): "${question}"`;
-  else text += '\n\nAnswer whatever was most recently asked or said above.';
-  if (instruction) text += `\n\nAdditional instruction from the user: ${instruction}`;
-  return text;
+  if (tail) latest += `\nLast lines of the conversation:\n${tail}`;
+  if (userQuestion) latest += `\n\nUser's question to you: ${userQuestion}`;
+  else if (question) latest += `\n\nQuestion to answer now (asked by Them): "${question}"`;
+  else latest += '\n\nAnswer whatever was most recently asked or said above.';
+  if (instruction) latest += `\n\nAdditional instruction from the user: ${instruction}`;
+  if (kind && KIND_HINTS[kind]) latest += `\n\n${KIND_HINTS[kind]}`;
+  return { context, latest };
 }
 
-// Text first, then each screenshot as its own inline_data part, in order.
-function buildUserParts(userText, images) {
-  const parts = [{ text: userText }];
+// The whole prompt as one string (tests, and anything that wants plain text).
+function buildConversationText(opts) {
+  const { context, latest } = buildConversation(opts);
+  return `${context}\n\n${latest}`;
+}
+
+// Context text, then each screenshot as its own inline_data part (in
+// capture order), then the LATEST text last.
+function buildUserParts(conversation, images) {
+  const conv = typeof conversation === 'string' ? { context: conversation, latest: '' } : conversation;
+  const parts = [{ text: conv.context }];
   for (const image of images || []) {
     if (!image || !image.base64) continue;
     parts.push({
@@ -502,6 +532,7 @@ function buildUserParts(userText, images) {
       },
     });
   }
+  if (conv.latest) parts.push({ text: conv.latest });
   return parts;
 }
 
@@ -512,10 +543,17 @@ function buildUserParts(userText, images) {
 // those nothing is sent and the model keeps its default.
 //
 // Auto policy (Settings > Quality vs speed = Auto) -- speed first:
-//   interview -> low for normal / behavioural questions; high only when the
-//                latest question looks like coding / maths / probability /
-//                a puzzle / system design, or screenshots are attached
-//                (usually a problem on screen)
+//   interview -> high ONLY for a NEW problem to solve (classifyQuestion():
+//                "write a function", "given an array...", "design a URL
+//                shortener", a probability/maths/puzzle question, a long
+//                technical problem statement, or screenshots attached that
+//                aren't just context for a short follow-up);
+//                low for everything else: behavioural questions AND
+//                technical follow-ups about code already discussed ("why
+//                did you use a hash map?", "what's the complexity?", "what
+//                if the input is empty?") -- those get the whole transcript
+//                plus the earlier answers (which hold the code) as context,
+//                and a short spoken format, so low is enough and ~2x faster.
 //   meeting / presentation / general -> low
 // Fast = always low, Max = always high.
 const THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high']);
@@ -532,7 +570,7 @@ const TECHNICAL_PATTERNS = [
   /\b(probabilit(y|ies)|expected value|odds of|dice|die rolls?|coin (flip|toss)\w*|random variables?|variance|standard deviation|bayes(ian)?|combinatorics|permutations?|combinations of|n choose k|choose \d)\b/i,
   /\b(maths?|mathematical|equations?|integrals?|derivatives?|prove that|proof|calculate|estimate how many|how many ways|sum of (the|all)|prime numbers?)\b/i,
   /\b(puzzles?|brain ?teasers?|riddles?|logic problems?)\b/i,
-  /\b(system design|design (a|an) \w+ (system|service|app|api|platform|database)|scalab\w+|at scale|load balanc\w*|caching|sharding|database schema|throughput|rate limit(er|ing)|microservices?|distributed systems?)\b/i,
+  /\b(system design|design (a|an) (\w+ ){0,2}(system|service|app|api|platform|database|cache|url shortener|rate limiter|parking lot|scheduler|key[- ]value store|news ?feed|chat)|scalab\w+|at scale|load balanc\w*|caching|sharding|database schema|throughput|rate limit(er|ing)|microservices?|distributed systems?)\b/i,
   /\d+\s*[*/^%]\s*\d+|\b\d{1,3}\s+[-+]\s+\d{1,3}\b|\bx\^\d|\bn\^2\b|\blog\s*n\b/i, // arithmetic, not year ranges
 ];
 
@@ -542,16 +580,109 @@ function looksTechnical(text) {
   return TECHNICAL_PATTERNS.some((re) => re.test(t));
 }
 
+// ---- New problem vs follow-up (classifyQuestion) ----
+// A request to solve / build something, phrased as an ask: at the start of
+// a sentence, or after "can you", "please", "let's", "how would you", ...
+const ASK_PREFIX = String.raw`(?:^|[.?!:;]\s+|\b(?:can|could|would|will) you\s+(?:please\s+)?|\bplease\s+|\b(?:now|so|okay|ok|alright|next|first|then),?\s+|\blet'?s\s+|\b(?:i'?d like|i want|i need) you to\s+|\bgo ahead and\s+|\btry (?:to\s+)?|\bhow (?:would|could|do|can|should) you\s+)`;
+const PROBLEM_VERBS = String.raw`(?:write|implement|code(?: up)?|build|create|design|architect|solve|find|return|count|compute|calculate|determine|check|detect|reverse|merge|sort|rotate|remove|validate|serialize|deserialize|flatten|traverse|invert|print|generate|convert|parse|estimate|prove|simulate|search|partition|schedule|model)`;
+
+// Enough on their own (the question reads like a problem statement even
+// when the technical keywords above miss it).
+const STRONG_PROBLEM_PATTERNS = [
+  /```/,
+  /\b(leetcode|hacker ?rank|coding (problem|question|challenge|exercise|task)|(next|following|first|second|another) (problem|exercise|coding question)|here'?s (a|the|your|another) (problem|puzzle|task|challenge|brain ?teaser|exercise)|here is (a|the|your|another) (problem|puzzle|task|challenge|brain ?teaser|exercise)|the (problem|task|challenge) is\b|your task is)\b/i,
+  /\b(brain ?teasers?|puzzles?|riddles?|logic problems?)\b/i,
+  /\b(probability (of|that)|expected (value|number)|odds (of|that)|in how many ways|how many (ways|different|possible|combinations)|estimate how many|prove that|n choose k)\b/i,
+  /\bgiven (a|an|two|three|the|some|n|k|\d+) (\w+ ){0,3}(arrays?|strings?|trees?|graphs?|matri(x|ces)|grids?|integers?|binary|linked lists?|sorted|unsorted|intervals?|nodes?|lists? of (numbers|integers|strings|words|intervals|points|pairs|meetings|prices|stock prices))\b/i,
+  /\b(minimum|maximum|fewest|shortest|longest|smallest|largest|kth|k-th) (number of|path|subarray|substring|subsequence|sum|product|distance|element|profit|depth|window)\b/i,
+];
+// Need a technical question to count (an ask + a solve verb).
+const WEAK_PROBLEM_PATTERNS = [
+  new RegExp(`${ASK_PREFIX}${PROBLEM_VERBS}\\b`, 'i'),
+];
+
+// About work that already exists (the user's code / solution / last answer).
+const FOLLOWUP_PATTERNS = [
+  /\bwhy (did|do|would|didn'?t|don'?t|wouldn'?t|have|are) you\b/i,
+  /\bwhy (not|use|is|are|does|this|that|a|an|the)\b/i,
+  /\bwhat (if|happens|would happen|about|changes|would change)\b/i,
+  /\bhow about\b/i,
+  /\bcomplexit(y|ies)\b|\bbig[- ]?o\b|\bruntime\b/i,
+  /\b(can|could|would) you (explain|walk|talk|go|run|take|tell|clarify|elaborate|justify)\b/i,
+  /\b(explain|walk me through|talk me through|take me through|go through|run me through)\s+(why|how|what|your|the|this|that|it|line|each)\b/i,
+  /\bhow (would|could|do|did|will|can) you (test|verify|debug|validate|check|handle|deal with|optimi[sz]e|improve|scale|extend|change|modify)\b|\btest cases?\b|\bunit tests?\b/i,
+  /\b(edge|corner) cases?\b/i,
+  /\b(can|could) you (optimi[sz]e|improve|speed|make it|do (it|this|that|better))\b|\bis there a (better|faster|more efficient|simpler|cleaner)\b|\bbetter (solution|approach|way)\b|\bany (way|optimi[sz]ations?)\b/i,
+  /\btrade-?offs?\b|\binstead of\b/i,
+  /\b(your|this|that|the above|the same) (code|solution|approach|function|implementation|algorithm|answer|loop|line|variable|data structure|recursion|query|design|method|class)\b/i,
+  /\byou (used|wrote|chose|picked|did|said|mentioned|called|added|have|use|wrote)\b/i,
+  /\b(does|would|will|can) (it|this|that|your \w+)\b.{0,40}\b(work|handle|scale|break|fail|overflow|terminate|still)\b/i,
+];
+// The question OPENS like a follow-up: then it is one even if it also says
+// "find" or "return" ("what if we need to return all pairs?").
+const FOLLOWUP_OPENER_RE = /^(?:(?:so|ok(?:ay)?|and|right|cool|great|nice|alright|got it|thanks|sure|interesting|hmm|um|uh|yeah|now)[,.]?\s+)*(?:why|what if|what happens|what would happen|what about|how about|what'?s the (?:time|space|runtime|big)|what is the (?:time|space|runtime|big)|how (?:would|could|do|did|will) you (?:test|handle|deal|verify|debug|optimi[sz]e|improve|scale|extend|change)|(?:can|could) you (?:explain|walk|talk|tell|optimi[sz]e|improve|clarify)|is there|are there|any (?:edge|corner|other|better)|does (?:it|this|that|your)|would (?:it|this|that|your)|will (?:it|this|that|your)|walk me through (?:your|the|this|that|it)|talk me through (?:your|the|this|that|it)|explain (?:your|the|this|that|why|how))\b/i;
+// Plain words that, after a technical answer, still point at the code.
+const CODE_REFERENCE_RE = /\b(inputs?|outputs?|returns?|pairs?|elements?|values?|null|empty|duplicates?|negative|overflow|memory|loops?|index|indices|(your|the|this|that)( current)? (code|solution|approach|function|implementation|algorithm|method))\b/i;
+const FOLLOWUP_MAX_WORDS = 25; // a short question that references earlier work
+const LONG_PROBLEM_WORDS = 40; // a long technical prompt reads as a problem statement
+
+function wordCount(text) {
+  const m = String(text || '').trim().match(/\S+/g);
+  return m ? m.length : 0;
+}
+
+// 'problem'  -- a NEW problem to solve (full walk-through, high thinking in interviews)
+// 'followup' -- a technical follow-up / conceptual question (short answer, low thinking)
+// 'general'  -- everything else (behavioural, small talk, meetings)
+// opts.hasImages: screenshots are attached; opts.hasPriorAnswer: answers
+// were already given this session; opts.priorCode: a recent answer was a
+// technical one (so plain-word follow-ups like "what if the input is empty?"
+// are about that code).
+function classifyQuestion(text, { hasImages = false, hasPriorAnswer = false, priorCode = false } = {}) {
+  const t = String(text || '').trim();
+  const technical = looksTechnical(t);
+  const words = wordCount(t);
+  const strong = STRONG_PROBLEM_PATTERNS.some((re) => re.test(t));
+  const problem = strong || (technical && WEAK_PROBLEM_PATTERNS.some((re) => re.test(t)));
+  const followup = FOLLOWUP_PATTERNS.some((re) => re.test(t));
+  const opener = FOLLOWUP_OPENER_RE.test(t);
+  const clearFollowUp = followup && words < FOLLOWUP_MAX_WORDS && (opener || !problem);
+
+  // Screenshots usually show a problem -- unless this is plainly a short
+  // follow-up to an answer already given (e.g. "Keep screenshots" is on).
+  if (hasImages) return clearFollowUp && hasPriorAnswer && !strong ? 'followup' : 'problem';
+  if (!technical && !problem) {
+    return followup && priorCode && words < LONG_PROBLEM_WORDS && CODE_REFERENCE_RE.test(t) ? 'followup' : 'general';
+  }
+  if (clearFollowUp) return 'followup';
+  if (problem) return 'problem';
+  if (followup) return 'followup'; // long, but about the existing code
+  if (words >= LONG_PROBLEM_WORDS) return 'problem';
+  return 'followup'; // short technical question with no task in it: conceptual
+}
+
+// What classifyQuestion() needs to know about the answers given so far.
+function priorContext(previousAnswers) {
+  const list = Array.isArray(previousAnswers) ? previousAnswers : [];
+  const recent = list.slice(-2);
+  return {
+    hasPriorAnswer: list.length > 0,
+    priorCode: recent.some((a) => /```/.test(a.text || '') || looksTechnical(a.question || '')),
+  };
+}
+
 function normalizeQuality(quality) {
   return typeof quality === 'string' && QUALITY_SETTINGS.has(quality) ? quality : 'auto';
 }
 
-function resolveThinkingLevel({ mode, quality, question, hasImages } = {}) {
+// kind: classifyQuestion() result, if the caller already has it.
+function resolveThinkingLevel({ mode, quality, question, hasImages, hasPriorAnswer, kind } = {}) {
   const q = normalizeQuality(quality);
   if (q === 'fast') return 'low';
   if (q === 'max') return 'high';
-  if (mode === 'interview') return hasImages || looksTechnical(question) ? 'high' : 'low';
-  return 'low';
+  if (mode !== 'interview') return 'low';
+  const k = kind || classifyQuestion(question, { hasImages, hasPriorAnswer });
+  return k === 'problem' ? 'high' : 'low';
 }
 
 function supportsThinkingLevel(model) {
@@ -562,34 +693,47 @@ function supportsThinkingLevel(model) {
 // for code. Gemini 3 counts thinking tokens against maxOutputTokens too, so
 // each level gets headroom on top -- otherwise a "high" think could eat the
 // whole budget and leave an empty answer. The prompt, not this cap, is what
-// keeps normal answers short; the cap is the backstop.
+// keeps normal answers short; the cap is the backstop (it never slows an
+// answer down, it only stops a runaway one).
 const ANSWER_TOKENS = {
   spoken: 400,
+  followUp: 700, // headline + 1-3 lines + maybe a tiny snippet
   detailed: 900, // Shorten / Expand / other explicit instructions
   technical: 2560, // walk-through steps + full code + complexity
   chat: 1024,
   chatTechnical: 3072,
   summary: 4096,
+  headline: 80, // the instant first line: one sentence
 };
-const THINKING_HEADROOM_TOKENS = { minimal: 256, low: 1024, medium: 2048, high: 6144 };
+const THINKING_HEADROOM_TOKENS = { minimal: 256, low: 1536, medium: 3072, high: 8192 };
 // No thinkingConfig sent (2.x model, or rejected): the model thinks at its default.
 const DEFAULT_THINKING_HEADROOM_TOKENS = 4096;
 
+function answerTokensFor(kind, instruction) {
+  if (kind === 'problem' || /```/.test(instruction || '')) return ANSWER_TOKENS.technical;
+  if (instruction) return Math.max(ANSWER_TOKENS.detailed, kind === 'followup' ? ANSWER_TOKENS.followUp : 0);
+  return kind === 'followup' ? ANSWER_TOKENS.followUp : ANSWER_TOKENS.spoken;
+}
+
 // ---- Per-session adaptive state ----
 // thinkingRejected: the model 400'd on thinkingConfig once -> stop sending it.
+// minimalRejected: the model only refused the 'minimal' level (some models
+// don't have it) -> use 'low' for those requests instead, and keep thinking
+// control for everything else.
 // streamFailures: consecutive broken streams -> after a couple, stop trying
 // to stream for this run (e.g. a proxy that buffers SSE).
-const session = { thinkingRejected: false, streamFailures: 0 };
+const session = { thinkingRejected: false, minimalRejected: false, streamFailures: 0 };
 const STREAM_DISABLE_AFTER_FAILURES = 2;
 
 function resetSessionState() {
   session.thinkingRejected = false;
+  session.minimalRejected = false;
   session.streamFailures = 0;
 }
 
-function geminiBody(req, withThinking) {
+function geminiBody(req, withThinking, level = req.thinkingLevel) {
   const headroom = withThinking
-    ? THINKING_HEADROOM_TOKENS[req.thinkingLevel] || DEFAULT_THINKING_HEADROOM_TOKENS
+    ? THINKING_HEADROOM_TOKENS[level] || DEFAULT_THINKING_HEADROOM_TOKENS
     : DEFAULT_THINKING_HEADROOM_TOKENS;
   return {
     systemInstruction: { parts: [{ text: req.systemPrompt }] },
@@ -597,7 +741,7 @@ function geminiBody(req, withThinking) {
     generationConfig: {
       ...(req.generationConfig || {}),
       maxOutputTokens: (req.answerTokens || ANSWER_TOKENS.spoken) + headroom,
-      ...(withThinking ? { thinkingConfig: { thinkingLevel: req.thinkingLevel } } : {}),
+      ...(withThinking ? { thinkingConfig: { thinkingLevel: level } } : {}),
     },
   };
 }
@@ -616,6 +760,7 @@ async function postGemini(endpoint, req) {
   const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:${endpoint}`;
   let withThinking =
     !!req.thinkingLevel && THINKING_LEVELS.has(req.thinkingLevel) && supportsThinkingLevel(model) && !session.thinkingRejected;
+  let level = req.thinkingLevel === 'minimal' && session.minimalRejected ? 'low' : req.thinkingLevel;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     let res;
@@ -627,7 +772,7 @@ async function postGemini(endpoint, req) {
           'x-goog-api-key': apiKey,
           'content-type': 'application/json',
         },
-        body: JSON.stringify(geminiBody(req, withThinking)),
+        body: JSON.stringify(geminiBody(req, withThinking, level)),
         // Covers the whole response, including reading a stream.
         signal: combineSignals(req.signal, req.timeoutMs),
       });
@@ -638,6 +783,14 @@ async function postGemini(endpoint, req) {
 
     const info = await readProviderError(res);
     if (res.status === 400 && withThinking && attempt === 0 && looksLikeThinkingRejection(info)) {
+      if (level === 'minimal') {
+        // Only this level is unsupported: don't give up thinking control
+        // for the full answers too.
+        session.minimalRejected = true;
+        level = 'low';
+        console.warn('[ai] Gemini rejected thinkingLevel "minimal" for this model -- using "low" for those requests.');
+        continue;
+      }
       session.thinkingRejected = true;
       withThinking = false;
       console.warn('[ai] Gemini rejected thinkingConfig for this model -- retrying without it for the rest of this session.');
@@ -800,14 +953,20 @@ const STREAM_FALLBACK_CODES = new Set(['STREAM_FAILED', 'PROVIDER_ERROR', 'PROVI
 // off for this session); otherwise -- or if the stream breaks -- falls back
 // to a plain generateContent call. The resolved text is always the full
 // answer, so a caller that showed partial chunks just replaces them with it.
+// req.streamOnly: never fall back (the instant first line -- a non-streamed
+// reply would arrive too late to be worth showing).
 async function callGemini(req) {
-  if (typeof req.onChunk === 'function' && session.streamFailures < STREAM_DISABLE_AFTER_FAILURES) {
+  const canStream = typeof req.onChunk === 'function' && session.streamFailures < STREAM_DISABLE_AFTER_FAILURES;
+  if (req.streamOnly && !canStream) throw aiError('STREAM_FAILED', 'Streaming is off for this session.');
+  if (canStream) {
     try {
       const result = await streamGemini(req, req.onChunk);
-      session.streamFailures = 0;
+      // Only full answers vouch for streaming (a tiny headline stream can
+      // get through a proxy that breaks long ones).
+      if (!req.streamOnly) session.streamFailures = 0;
       return result;
     } catch (err) {
-      if ((req.signal && req.signal.aborted) || !STREAM_FALLBACK_CODES.has(err.code)) throw err;
+      if ((req.signal && req.signal.aborted) || !STREAM_FALLBACK_CODES.has(err.code) || req.streamOnly) throw err;
       if (err.code === 'STREAM_FAILED') session.streamFailures += 1;
       console.warn(`[ai] Gemini streaming failed (${err.code}) -- falling back to a normal request.`);
     }
@@ -845,14 +1004,14 @@ async function generateSuggestion({
   const named = String(question || '').trim();
   const latest = named || latestUtterance(transcript);
   const hasImages = !!(images && images.length);
-  const thinkingLevel = resolveThinkingLevel({ mode, quality, question: latest, hasImages });
-  const technical = hasImages || looksTechnical(latest) || /```/.test(instruction || '');
-  const answerTokens = technical ? ANSWER_TOKENS.technical : instruction ? ANSWER_TOKENS.detailed : ANSWER_TOKENS.spoken;
+  const kind = classifyQuestion(latest, { hasImages, ...priorContext(previousAnswers) });
+  const thinkingLevel = resolveThinkingLevel({ mode, quality, kind });
+  const answerTokens = answerTokensFor(kind, instruction);
 
-  const userText = buildConversationText({ transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images });
+  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind });
   const result = await callGemini({
     systemPrompt: buildSystemPrompt(mode, answerStyle),
-    parts: buildUserParts(userText, images),
+    parts: buildUserParts(conversation, images),
     generationConfig: { temperature: 0.4 },
     thinkingLevel,
     answerTokens,
@@ -867,20 +1026,117 @@ async function generateSuggestion({
     text: withCutOffNote(humanizeResult(result)),
     groundingFiles,
     thinkingLevel,
+    questionKind: kind,
     answerStyle: normalizeAnswerStyle(answerStyle),
   };
+}
+
+// ---- Instant first line ("headline") ----
+// A tiny, fast call fired in parallel with every suggestion (main.js /
+// suggest-pipeline.js): minimal thinking, ~80 output tokens, a trimmed
+// context, streamed. Its one sentence is shown in the big first-line slot
+// until the full answer's own first sentence is ready (renderer.js), so the
+// user has something to say within about a second even when the full answer
+// thinks hard. The full answer stays the source of truth.
+const HEADLINE_TRANSCRIPT_CHARS = 8000;
+const HEADLINE_PREVIOUS_ANSWERS = 2;
+const HEADLINE_PREVIOUS_ANSWER_CHARS = 1500;
+
+const HEADLINE_SITUATIONS = {
+  interview: 'The user is in a live job interview right now.',
+  meeting: 'The user is in a live meeting right now.',
+  presentation: 'The user is presenting and taking questions right now.',
+  general: 'The user is in a live conversation right now.',
+};
+
+function buildHeadlineSystemPrompt(mode) {
+  const situation = Object.prototype.hasOwnProperty.call(HEADLINE_SITUATIONS, mode) ? HEADLINE_SITUATIONS[mode] : HEADLINE_SITUATIONS.general;
+  return `${situation} Give ONLY the first sentence the user should say out loud right now, in their own voice, in reply to the latest question. A fuller answer is being written separately and follows a moment later; your sentence is what they start talking with while it loads.
+- Exactly one short spoken sentence (under 25 words), first person, contractions, plain everyday words. It directly answers the question, or opens the answer, and works on its own.
+- No preamble, no quotation marks around it, no labels, no markdown, no lists, no code.
+- A NEW coding, maths or design problem: say how you'd start (briefly restate what's asked, or the approach you're sure of). Never state a final number or claim you aren't sure of.
+- A follow-up about code already discussed (why X, what if, complexity, testing, edge cases): the direct answer in one line, consistent with the earlier answers.
+- Ground it in the conversation and the user's background. Never invent projects, employers, numbers or experience.
+- ${BANNED_TELLS}`;
+}
+
+// Last ~8k chars of the transcript (whole lines), the latest question, the
+// last couple of answers (they hold the code a follow-up is about) and the
+// knowledge snippets -- enough to say the right first sentence, small enough
+// to be quick.
+function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind }) {
+  const recent = capTranscript(transcript, HEADLINE_TRANSCRIPT_CHARS);
+  let context = `RECENT CONVERSATION (oldest first; "You" = the user, "Them" = the other side):\n\n${recent || '(no transcript yet)'}`;
+  if (Array.isArray(previousAnswers) && previousAnswers.length) {
+    const lastFew = previousAnswers.slice(-HEADLINE_PREVIOUS_ANSWERS)
+      .map((a) => ({ ...a, text: clip(a.text, HEADLINE_PREVIOUS_ANSWER_CHARS) }));
+    context += buildPreviousAnswersBlock(lastFew);
+  }
+  context += buildKnowledgeBlock(knowledgeSnippets);
+  context += describeScreenshots(images);
+  let latest = '=== LATEST ===';
+  const tail = recent ? latestLines(recent) : '';
+  if (tail) latest += `\nLast lines of the conversation:\n${tail}`;
+  if (question) latest += `\n\nQuestion to answer now (asked by Them): "${question}"`;
+  else latest += '\n\nAnswer whatever was most recently asked or said above.';
+  if (instruction) latest += `\n\nAdditional instruction from the user: ${instruction}`;
+  if (kind === 'problem') latest += '\n\nThis is a new problem to solve.';
+  else if (kind === 'followup') latest += '\n\nThis is a follow-up about what was already discussed.';
+  latest += '\n\nReply with ONLY the first sentence the user should say.';
+  return { context, latest };
+}
+
+// First sentence of the headline reply, without wrapping quotes.
+function firstSpokenSentence(text) {
+  let t = String(text || '').trim().split('\n').find((l) => l.trim()) || '';
+  t = t.trim().replace(/^["'“‘]+/, '');
+  const m = /^(.+?[.!?])["'”’]*(?:\s|$)/.exec(t);
+  return (m ? m[1] : t).replace(/["'”’]+$/, '').trim();
+}
+
+async function generateHeadline({
+  transcript, mode, instruction, question, previousAnswers, images, knowledgeSnippets, signal, onChunk,
+}) {
+  const named = String(question || '').trim();
+  const latest = named || latestUtterance(transcript);
+  const hasImages = !!(images && images.length);
+  const kind = classifyQuestion(latest, { hasImages, ...priorContext(previousAnswers) });
+  const filter = typeof onChunk === 'function' ? createStreamHumanizer() : null;
+  const result = await callGemini({
+    systemPrompt: buildHeadlineSystemPrompt(mode),
+    parts: buildUserParts(buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind }), images),
+    generationConfig: { temperature: 0.3 },
+    thinkingLevel: 'minimal',
+    answerTokens: ANSWER_TOKENS.headline,
+    signal,
+    timeoutMs: HEADLINE_TIMEOUT_MS,
+    // A late first line is useless: never fall back to a non-streaming retry.
+    streamOnly: true,
+    onChunk: filter
+      ? (delta) => {
+        const out = filter.push(delta);
+        if (out) onChunk(out);
+      }
+      : undefined,
+  });
+  if (filter) {
+    const rest = filter.end(); // e.g. a short reply the opener check was still holding
+    if (rest) onChunk(rest);
+  }
+  return { text: firstSpokenSentence(humanizeAnswer(result.text)), questionKind: kind };
 }
 
 async function askFollowUp({
   transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, signal, onChunk,
 }) {
   const hasImages = !!(images && images.length);
-  const thinkingLevel = resolveThinkingLevel({ mode, quality, question, hasImages });
-  const technical = hasImages || looksTechnical(question);
-  const userText = buildConversationText({ transcript, previousAnswers, knowledgeSnippets, userQuestion: question, images });
+  const kind = classifyQuestion(question, { hasImages, ...priorContext(previousAnswers) });
+  const thinkingLevel = resolveThinkingLevel({ mode, quality, kind });
+  const technical = kind === 'problem' || looksTechnical(question);
+  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, userQuestion: question, images });
   const result = await callGemini({
     systemPrompt: ASK_SYSTEM_PROMPT,
-    parts: buildUserParts(userText, images),
+    parts: buildUserParts(conversation, images),
     generationConfig: { temperature: 0.4 },
     thinkingLevel,
     answerTokens: technical ? ANSWER_TOKENS.chatTechnical : ANSWER_TOKENS.chat,
@@ -979,6 +1235,7 @@ async function testKeys() {
 module.exports = {
   transcribeAudio,
   generateSuggestion,
+  generateHeadline,
   askFollowUp,
   summarizeSession,
   testKeys,
@@ -993,9 +1250,18 @@ module.exports = {
   MAX_PROMPT_TRANSCRIPT_CHARS,
   TRANSCRIPT_TRIMMED_MARKER,
   capTranscript,
+  buildConversation,
   buildConversationText,
+  buildUserParts,
+  buildHeadlineSystemPrompt,
+  firstSpokenSentence,
   looksTechnical,
+  classifyQuestion,
+  priorContext,
   resolveThinkingLevel,
+  answerTokensFor,
+  ANSWER_TOKENS,
+  THINKING_HEADROOM_TOKENS,
   createSseParser,
   _resetSessionState: resetSessionState,
 };

@@ -22,8 +22,12 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  // End a chunk once this much quiet follows speech.
-  const SILENCE_MS = 700;
+  // End a chunk once this much quiet follows speech. 550 ms (was 700): the
+  // answer starts ~150 ms sooner, while a normal breath between words
+  // (200-500 ms) still doesn't split a sentence. A question that does get
+  // split at a longer pause is caught by question-core.js (it waits for the
+  // rest of a line that trails off).
+  const SILENCE_MS = 550;
   // Never cut a chunk shorter than this (Whisper does badly on tiny clips).
   const MIN_CHUNK_MS = 800;
   // Safety cut for someone talking without pausing.
