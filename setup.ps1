@@ -149,6 +149,15 @@ if (-not $installed) {
 }
 Write-Ok 'Dependencies installed.'
 
+# Since Electron 42, npm install no longer downloads the Electron runtime
+# (~100 MB from GitHub); fetch it here so it gets the same retries.
+$fetched = Invoke-WithRetry 'Electron download' 3 { & npm run electron:fetch } `
+  'GitHub sometimes answers 504; retrying usually works.'
+if (-not $fetched) {
+  Stop-Setup "Couldn't download Electron. Check your internet connection and run setup again (retrying usually helps)."
+}
+Write-Ok 'Electron runtime ready.'
+
 # ---- 4. Build + install, or run ----
 Write-Step 'What next?'
 Write-Host '    A) Build and install the Echo desktop app (Start menu + desktop shortcut)  [default]'

@@ -32,7 +32,7 @@ It never asks for API keys: you paste those into Echo's Settings. If it stops, r
 
 ## Quick start (from source)
 
-You need [Node.js](https://nodejs.org) **22 or newer** (the installer tools need 22.12+).
+You need [Node.js](https://nodejs.org) **22.12 or newer**. The first `npm start` downloads the Electron runtime (~100 MB from GitHub) if it isn't there yet; if that download fails (GitHub sometimes answers 504), run `npm run electron:fetch` to retry.
 
 ```bash
 git clone https://github.com/conoorsheedy-oss/Echo.git
@@ -173,7 +173,9 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 | "Deepgram account is out of credit" (HTTP 402) | Add credit in the Deepgram console, or set **Speech-to-text** back to Groq. Echo switches to Groq for the session if a Groq key is set. |
 | Live transcript not appearing (Deepgram) | Check the Mic / System audio dots (Live transcript drawer) glow when people talk (Echo only streams while it hears voice). Open `Ctrl+Shift+D`: "Audio chunks" should say `Deepgram live (worklet, open)`; `reconnecting` or a banner means the connection dropped. A changed Speech-to-text setting applies the next time you press Start Listening. Firewalls must allow `wss://api.deepgram.com`. |
 | `git pull` refuses: "local changes would be overwritten" | Run `setup.cmd` (it offers to discard `package.json` / `package-lock.json` changes and stashes anything else), or run `git checkout -- package.json package-lock.json` yourself. |
-| `npm install` / `npm run dist` fails on Node 18 or 20 | Install Node.js 22 or newer (LTS) and run it again. `setup.cmd` can install it for you. |
+| `npm install` / `npm run dist` fails on Node 18 or 20 | Install Node.js 22.12 or newer (LTS) and run it again. `setup.cmd` can install it for you. |
+| "Electron failed to install correctly" on `npm start` | The Electron runtime download failed (usually a GitHub 504). Run `npm run electron:fetch` until it succeeds, then `npm start`. |
+| Linux (Wayland): the window doesn't stay on top or forgets its position | Electron runs as a native Wayland app there, and Wayland doesn't let apps position or pin windows. Start it under XWayland: `npm start -- --ozone-platform=x11`. |
 | "rate limit hit" (HTTP 429) | Free-tier limit. Wait a minute and try again. Long sessions can hit it. |
 | **System audio (unavailable)** / only your side is transcribed | System-audio capture works best on Windows. On macOS it needs extra permissions or a loopback device; Echo falls back to mic only. |
 | "Gesture model missing - run npm install" | Run `npm install` (or `npm run gestures:fetch`). If the file is damaged: `npm run gestures:fetch -- --force`. |
@@ -185,14 +187,14 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 
 ## Building the installer
 
-For maintainers. On Windows, with Node.js 22+:
+For maintainers. On Windows, with Node.js 22.12+:
 
 ```bash
 npm install
 npm run dist
 ```
 
-This writes `dist/Echo-Setup-<version>.exe` (NSIS, x64). `npm run dist` first re-checks the hand-gesture files and stops if any are missing (fix: `npm run gestures:fetch`). `npm run pack` builds just the unpacked app in `dist/` for a quick test.
+This writes `dist/Echo-Setup-<version>.exe` (NSIS, x64). `npm run dist` first downloads the Electron runtime into `node_modules/electron/dist` if it isn't there yet (since Electron 42, `npm install` no longer does), then re-checks the hand-gesture files and stops if any are missing (fix: `npm run gestures:fetch`). `npm run pack` builds just the unpacked app in `dist/` for a quick test.
 
 To publish a release, set `version` in `package.json`, commit, and push a matching tag:
 

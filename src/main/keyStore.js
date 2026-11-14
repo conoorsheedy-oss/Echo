@@ -27,17 +27,27 @@ function keysFile() {
   return path.join(app.getPath('userData'), 'keys.enc.json');
 }
 
-// Decrypted keys cached in memory for this run only (avoids hitting the OS
-// keychain on every audio chunk). Cleared on save/remove.
-let cache = null;
+// Decrypted keys, held in memory for this run only (so the OS keychain isn't
+// hit on every audio chunk). Filled once at startup by init() -- main.js
+// awaits it before opening the window, so getKey() can stay synchronous --
+// and updated in place by saveKeys() / removeKeys().
+//
+// safeStorage's asynchronous API is used throughout: the synchronous
+// isEncryptionAvailable/encryptString/decryptString are deprecated in
+// Electron 45 and removed in 46. Ciphertext written by the old synchronous
+// API decrypts fine with decryptStringAsync (same per-platform key stores).
+let cache = {};
+let encStatus = { available: false, reason: 'OS-backed encryption has not been checked yet.' };
+let initPromise = null;
 
-function encryptionStatus() {
+async function checkEncryption() {
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) {
       return { available: false, reason: 'Your system has no OS-backed encryption available for Electron.' };
     }
     // On Linux without a keyring, Electron falls back to a hardcoded
-    // password ("basic_text") -- that's obfuscation, not encryption.
+    // password ("basic_text") -- that's obfuscation, not encryption. The
+    // async API reports itself available even then, so check the backend.
     if (process.platform === 'linux' && typeof safeStorage.getSelectedStorageBackend === 'function') {
       const storageBackend = safeStorage.getSelectedStorageBackend();
       if (storageBackend === 'basic_text' || storageBackend === 'unknown') {
@@ -59,22 +69,57 @@ function readSavedFile() {
   }
 }
 
-function loadSaved() {
-  if (cache) return cache;
+function writeSavedFile(next) {
+  fs.mkdirSync(path.dirname(keysFile()), { recursive: true });
+  // Write-then-rename so a crash mid-write can't leave a half-written file.
+  const tmp = `${keysFile()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, keysFile());
+}
+
+async function encrypt(value) {
+  return (await safeStorage.encryptStringAsync(value)).toString('base64');
+}
+
+async function loadSaved() {
+  encStatus = await checkEncryption();
   const out = {};
   const file = readSavedFile();
-  const canDecrypt = encryptionStatus().available;
+  if (!encStatus.available) return out;
+  const reEncrypt = {};
   for (const p of PROVIDERS) {
-    if (typeof file[p] !== 'string' || !file[p] || !canDecrypt) continue;
+    if (typeof file[p] !== 'string' || !file[p]) continue;
     try {
-      out[p] = safeStorage.decryptString(Buffer.from(file[p], 'base64'));
+      const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(Buffer.from(file[p], 'base64'));
+      out[p] = result;
+      if (shouldReEncrypt) reEncrypt[p] = result;
     } catch (err) {
       // Encrypted on another machine/user account, or the keyring changed.
       console.error(`[keys] Could not decrypt the saved ${p} key -- please paste it again.`);
     }
   }
-  cache = out;
-  return cache;
+  // The OS rotated the key (or a stronger one is available): store fresh
+  // ciphertext. Best-effort -- the old ciphertext still decrypts meanwhile.
+  if (Object.keys(reEncrypt).length) {
+    try {
+      const next = { ...file };
+      for (const [p, v] of Object.entries(reEncrypt)) next[p] = await encrypt(v);
+      writeSavedFile(next);
+    } catch (err) {
+      console.error('[keys] Could not re-encrypt the saved keys:', err.message);
+    }
+  }
+  return out;
+}
+
+// Call once after app 'ready' (safeStorage needs it); safe to call again.
+function init() {
+  if (!initPromise) {
+    initPromise = loadSaved().then((keys) => {
+      cache = keys;
+    });
+  }
+  return initPromise;
 }
 
 function envKey(provider) {
@@ -85,18 +130,18 @@ function envKey(provider) {
 // Main-process only. Saved key wins over .env.
 function getKey(provider) {
   if (!PROVIDERS.includes(provider)) return '';
-  return loadSaved()[provider] || envKey(provider);
+  return cache[provider] || envKey(provider);
 }
 
 function sourceOf(provider) {
-  if (loadSaved()[provider]) return 'saved';
+  if (cache[provider]) return 'saved';
   if (envKey(provider)) return 'env';
   return null;
 }
 
 // The ONLY key information the renderer ever gets.
 function getStatus() {
-  const enc = encryptionStatus();
+  const enc = encStatus;
   const groqSource = sourceOf('groq');
   const geminiSource = sourceOf('gemini');
   const deepgramSource = sourceOf('deepgram');
@@ -126,8 +171,9 @@ function validateKey(provider, value) {
 }
 
 // keys: { groq?, gemini?, deepgram? } (strings) -- empty/missing fields are left as they are.
-function saveKeys(keys = {}) {
-  const enc = encryptionStatus();
+async function saveKeys(keys = {}) {
+  await init();
+  const enc = encStatus;
   if (!enc.available) {
     const err = new Error(
       `${enc.reason} Echo won't store keys in plain text -- put GROQ_API_KEY and GEMINI_API_KEY (and DEEPGRAM_API_KEY if you use it) in a .env file instead (see README).`
@@ -149,16 +195,12 @@ function saveKeys(keys = {}) {
   const next = {};
   for (const p of PROVIDERS) if (typeof file[p] === 'string' && file[p]) next[p] = file[p];
   for (const [p, v] of Object.entries(updates)) {
-    next[p] = safeStorage.encryptString(v).toString('base64');
+    next[p] = await encrypt(v);
   }
   next.updatedAt = new Date().toISOString();
 
-  fs.mkdirSync(path.dirname(keysFile()), { recursive: true });
-  // Write-then-rename so a crash mid-write can't leave a half-written file.
-  const tmp = `${keysFile()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(next), { encoding: 'utf8', mode: 0o600 });
-  fs.renameSync(tmp, keysFile());
-  cache = null;
+  writeSavedFile(next);
+  cache = { ...cache, ...updates };
   return getStatus();
 }
 
@@ -171,8 +213,8 @@ function removeKeys() {
   } catch (err) {
     if (err.code !== 'ENOENT') throw new Error('Could not remove the saved keys file.');
   }
-  cache = null;
+  cache = {};
   return getStatus();
 }
 
-module.exports = { getKey, getStatus, saveKeys, removeKeys };
+module.exports = { init, getKey, getStatus, saveKeys, removeKeys };

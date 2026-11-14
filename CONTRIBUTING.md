@@ -4,7 +4,7 @@ Thanks for helping out. Echo is deliberately small: plain Electron, no framework
 
 ## Setup
 
-You need [Node.js](https://nodejs.org) **22 or newer** (electron-builder's dependencies need 22.12+). On Windows, `setup.cmd` does all of this for you.
+You need [Node.js](https://nodejs.org) **22.12 or newer** (Electron's npm package and electron-builder's dependencies need it). On Windows, `setup.cmd` does all of this for you.
 
 ```bash
 npm install     # also fetches the hand-gesture runtime + model

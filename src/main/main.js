@@ -151,9 +151,11 @@ function toggleContentProtection() {
 // in-memory only: a fresh or recreated window starts with it off and the
 // renderer re-enables it from the user's saved choice.
 let gesturesEnabled = false;
-// System-audio capture is a getUserMedia() call with a desktop *video* track
-// (dropped immediately), so camera-style 'video' requests are also allowed for
-// a few seconds right after the renderer asks for the desktop audio source.
+// System-audio capture is a getUserMedia() call with chromeMediaSource:
+// 'desktop' constraints (its video track is dropped immediately). Electron 45+
+// reports that as a separate 'display-capture' permission (not 'media'), which
+// is allowed only for a few seconds right after the renderer asks main for the
+// desktop audio source.
 let desktopCaptureArmedUntil = 0;
 const DESKTOP_CAPTURE_ARM_MS = 15_000;
 
@@ -185,17 +187,18 @@ function isOwnOverlayPage(webContents, url) {
   }
 }
 
-function videoCaptureAllowed() {
-  return gesturesEnabled || Date.now() < desktopCaptureArmedUntil;
+function desktopCaptureAllowed() {
+  return Date.now() < desktopCaptureArmedUntil;
 }
 
-// mediaTypes: ['audio'] for the mic; ['audio', 'video'] / ['video'] for system
-// audio (desktop capture) and the webcam.
+// 'media' is only the mic and the webcam (screen/window capture is
+// 'display-capture'): mediaTypes ['audio'] for the mic, ['video'] for the
+// webcam, which only hand gestures use.
 function mediaRequestAllowed(webContents, details) {
   if (!isOwnOverlayPage(webContents, details && details.requestingUrl)) return false;
   const types = Array.isArray(details && details.mediaTypes) ? details.mediaTypes : [];
   if (types.length && types.every((t) => t === 'audio')) return true;
-  return videoCaptureAllowed();
+  return gesturesEnabled;
 }
 
 function cameraAccessStatus() {
@@ -301,14 +304,13 @@ function createOverlayWindow() {
   }
 
   // Echo renderer errors/warnings to the terminal (npm start) as
-  // "[renderer error] ..." / "[renderer warning] ..." (or a numeric level on
-  // older Electron) so a broken script is visible without DevTools.
-  overlayWindow.webContents.on('console-message', (...args) => {
-    // Electron <=34: (event, level, message, line, sourceId); newer: (event) with details on the event.
-    const details = args[0] && typeof args[0].message === 'string' ? args[0] : { level: args[1], message: args[2], lineNumber: args[3], sourceId: args[4] };
-    const level = details.level;
-    if (level === 'error' || level === 3 || level === 2 || level === 'warning') {
-      console.log(`[renderer ${level}] ${details.message} (${details.sourceId || ''}:${details.lineNumber || ''})`);
+  // "[renderer error] ..." / "[renderer warning] ..." so a broken script is
+  // visible without DevTools. (The old positional (event, level, message,
+  // line, sourceId) arguments are deprecated since Electron 35.)
+  overlayWindow.webContents.on('console-message', (details) => {
+    const { level, message, sourceId, lineNumber } = details;
+    if (level === 'error' || level === 'warning') {
+      console.log(`[renderer ${level}] ${message} (${sourceId || ''}:${lineNumber || ''})`);
     }
   });
 
@@ -523,9 +525,13 @@ function registerShortcuts() {
 if (!app.requestSingleInstanceLock()) {
   app.exit(0);
 }
-app.on('second-instance', () => showOverlay());
+// Ignored until startup has created the window (it's shown then anyway).
+let started = false;
+app.on('second-instance', () => {
+  if (started) showOverlay();
+});
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Permissions: deny by default. Our own overlay page gets the mic and
   // system audio without a prompt (so getUserMedia doesn't stall), the
   // webcam ONLY while hand gestures are switched on, and clipboard writes
@@ -533,6 +539,11 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     if (permission === 'media') {
       callback(mediaRequestAllowed(webContents, details));
+      return;
+    }
+    // System audio (see desktopCaptureArmedUntil above).
+    if (permission === 'display-capture') {
+      callback(isOwnOverlayPage(webContents, details && details.requestingUrl) && desktopCaptureAllowed());
       return;
     }
     if (permission === 'clipboard-sanitized-write') {
@@ -545,15 +556,24 @@ app.whenReady().then(() => {
     const url = details && details.requestingUrl;
     if (permission === 'media') {
       if (!isOwnOverlayPage(webContents, url)) return false;
-      return details.mediaType === 'video' ? videoCaptureAllowed() : true;
+      return details.mediaType === 'video' ? gesturesEnabled : true;
     }
+    if (permission === 'display-capture') return isOwnOverlayPage(webContents, url) && desktopCaptureAllowed();
     if (permission === 'clipboard-sanitized-write') return isOwnOverlayPage(webContents, url);
     return false;
   });
 
+  // Decrypt any saved API keys before the window (and its IPC calls) exists.
+  try {
+    await keyStore.init();
+  } catch (err) {
+    console.error('[keys] Could not load saved keys:', err);
+  }
+
   createOverlayWindow();
   createTray();
   registerShortcuts();
+  started = true;
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createOverlayWindow();
@@ -897,7 +917,10 @@ handle('ai:summarize', async (_evt, { transcript } = {}) => {
 // handler here returns only keyStore.getStatus() (booleans + where each key
 // came from).
 
-handle('keys:status', async () => keyStore.getStatus());
+handle('keys:status', async () => {
+  await keyStore.init(); // already done at startup; cheap no-op after that
+  return keyStore.getStatus();
+});
 
 handle('keys:save', async (_evt, { groq, gemini, deepgram: deepgramKey } = {}) => {
   assertOptionalString(groq, 'Groq key', 400);
@@ -1091,7 +1114,7 @@ handle('gestures:load-model', async () => {
 handle('clipboard:write-text', async (_evt, { text } = {}) => {
   if (typeof text !== 'string') throw new Error('Invalid text.');
   if (text.length > MAX_TEXT_CHARS) throw new Error('text is too long.');
-  clipboard.writeText(text);
+  await clipboard.writeText(text); // a Promise since Electron 44
   return true;
 });
 

@@ -59,7 +59,7 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 
 ## Speech-to-text flow
 
-1. **Start** opens the mic and system audio (a desktop-capture stream whose video track is dropped).
+1. **Start** opens the mic and system audio (a `getUserMedia` desktop-capture stream, `chromeMediaSource: 'desktop'` with the screen id from `desktop:get-audio-source`, whose video track is dropped).
 2. Each stream gets its own Web Audio `AnalyserNode` (never connected to the speakers) and its own `VadSegmenter` from `vad-core.js`. Every 40 ms the renderer reads the RMS loudness of the last ~21 ms of samples and feeds it to the segmenter.
 3. A `MediaRecorder` is **always running** on each stream, so the first syllable is never lost waiting for "speech started". The segmenter answers each reading with:
    - **cut**: speech happened and then `SILENCE_MS` (550 ms; was 700 ms) of quiet followed, or someone talked for `MAX_CHUNK_MS` (12 s) without pausing. The next recorder starts first, then the finished one stops and uploads. One recorder per chunk means every chunk is a complete, standalone webm/opus file.
@@ -86,7 +86,7 @@ main: deepgram.js ─► wss://api.deepgram.com/v1/listen  (one socket per speak
       ◄─ Results / UtteranceEnd ─► deepgram-core.js assembler ─► 'stt:stream-event' to the renderer
 ```
 
-1. **Start**: for each stream the renderer calls `stt:stream-start` (`{ speaker }`). Main opens a WebSocket with `model=nova-3`, `smart_format=true`, `interim_results=true`, `endpointing=300`, `utterance_end_ms=1000`, `vad_events=true`, `encoding=linear16`, `sample_rate=16000`, `channels=1`, `language=en` (`DEEPGRAM_MODEL` / `DEEPGRAM_LANGUAGE` in `.env` override the last two). The key goes in the handshake's `Authorization: Token <key>` header via the `ws` package: Electron 31's Node has no global WebSocket, and the WHATWG API can't set headers anyway. (Deepgram's `token` subprotocol alternative would put the key in `Sec-WebSocket-Protocol`, which is logged more readily.) The invoke resolves once the socket is open, or rejects with a coded error: `BAD_KEY` (401/403), `NO_CREDIT` (402), `RATE_LIMIT` (429), `OFFLINE` / `TIMEOUT`, `NO_KEY`.
+1. **Start**: for each stream the renderer calls `stt:stream-start` (`{ speaker }`). Main opens a WebSocket with `model=nova-3`, `smart_format=true`, `interim_results=true`, `endpointing=300`, `utterance_end_ms=1000`, `vad_events=true`, `encoding=linear16`, `sample_rate=16000`, `channels=1`, `language=en` (`DEEPGRAM_MODEL` / `DEEPGRAM_LANGUAGE` in `.env` override the last two). The key goes in the handshake's `Authorization: Token <key>` header via the `ws` package: the WHATWG `WebSocket` (global in Electron 45's Node 24) can't set headers. (Deepgram's `token` subprotocol alternative would put the key in `Sec-WebSocket-Protocol`, which is logged more readily.) The invoke resolves once the socket is open, or rejects with a coded error: `BAD_KEY` (401/403), `NO_CREDIT` (402), `RATE_LIMIT` (429), `OFFLINE` / `TIMEOUT`, `NO_KEY`.
 2. **Audio**: `stt:stream-audio` is fire-and-forget (`ipcRenderer.send`, ~10 frames/s per stream while someone talks). Main checks the sender is Echo's own page and that the frame is bytes with an even length ≤ 1 s of audio, then forwards it as a binary WebSocket message. A few frames are queued while (re)connecting.
 3. **Idle**: the renderer stops sending 1.5 s after the last voiced VAD frame (longer than `utterance_end_ms`, so Deepgram still sees the pause). Main then sends `{"type":"Finalize"}` (0.8 s after the last frame) and `{"type":"KeepAlive"}` every 5 s (Deepgram closes idle streams after ~10 s; its docs suggest 3-5 s).
 4. **Transcripts**: `deepgram-core.js` turns `Results` / `UtteranceEnd` into renderer events `{ speaker, kind }`:
@@ -144,7 +144,7 @@ Prompts live in `ai.js`:
 
 ## Key storage
 
-`keyStore.js` encrypts keys with Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, libsecret/KWallet on Linux) and writes only ciphertext to `keys.enc.json` in the app's user-data folder. If OS encryption isn't available, it refuses to save (use `.env` instead). The renderer only gets booleans plus where each key came from (`saved` / `env`). Keys are sent only to their own provider, in headers, and never logged.
+`keyStore.js` encrypts keys with Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, libsecret/KWallet on Linux) and writes only ciphertext to `keys.enc.json` in the app's user-data folder. It uses the asynchronous API (`isAsyncEncryptionAvailable` / `encryptStringAsync` / `decryptStringAsync`; the synchronous calls are deprecated in Electron 45 and removed in 46, and keys saved by older Echo versions still decrypt). `main.js` awaits `keyStore.init()`, which decrypts the saved keys into memory, before it opens the window, so `getKey()` stays synchronous. If OS encryption isn't available, it refuses to save (use `.env` instead); on Linux that includes the `basic_text` fallback (no keyring), which the async API would otherwise accept. The renderer only gets booleans plus where each key came from (`saved` / `env`). Keys are sent only to their own provider, in headers, and never logged.
 
 ## Hand gestures
 
@@ -155,7 +155,7 @@ Prompts live in `ai.js`:
 - **CSP** (`index.html`): `default-src 'self'`, `connect-src 'self'` (the page can't call the internet; main does), no inline scripts or styles. `'wasm-unsafe-eval'` is only there so MediaPipe's WebAssembly can run.
 - The window denies new windows and navigation. `external:open` only opens three allowlisted key pages (Groq, Gemini, Deepgram sign-up).
 - The CSP is unchanged by Deepgram mode: the AudioWorklet module (`pcm-worklet.js`) is a same-origin file, which `script-src 'self'` already allows, and the WebSocket is opened by main, not the page.
-- Permissions are deny-by-default and only for Echo's own page: mic and system audio, clipboard writes, and the camera only while gestures are on (plus a few seconds after a system-audio request, which uses a desktop video track).
+- Permissions are deny-by-default and only for Echo's own page: the mic (`media`, audio), clipboard writes (`clipboard-sanitized-write`), the camera (`media`, video) only while gestures are on, and desktop capture for system audio (`display-capture`, which Electron 45+ uses for `chromeMediaSource` requests) only for a few seconds after the renderer calls `desktop:get-audio-source`.
 
 ## Tests
 

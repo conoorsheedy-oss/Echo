@@ -7,8 +7,8 @@
 // "Them".
 //
 // Auth: an `Authorization: Token <key>` header on the WebSocket handshake,
-// via the `ws` package. Electron 31's Node (20.x) has no global WebSocket,
-// and the WHATWG WebSocket API can't set headers anyway. (Deepgram also
+// via the `ws` package: the WHATWG WebSocket API (global in Electron 45's
+// Node 24) can't set headers. (Deepgram also
 // accepts the key as a `token` subprotocol, but that puts it in
 // Sec-WebSocket-Protocol, which proxies and servers log far more readily.)
 //

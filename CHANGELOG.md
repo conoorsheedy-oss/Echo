@@ -23,7 +23,12 @@
 - The WebSocket lives in the main process (`src/main/deepgram.js`, using the `ws` package), so the Deepgram key never reaches the UI. Audio is captured with an AudioWorklet (ScriptProcessorNode fallback), converted to 16 kHz 16-bit PCM and streamed only while someone is talking. KeepAlive while idle, CloseStream on stop, up to 3 reconnects, then an automatic fall back to Groq Whisper when a Groq key is set.
 - Start Listening now needs Gemini + the chosen speech-to-text provider's key; the banner and Settings say which one is missing. **Test keys** also checks the Deepgram key (a free, read-only request).
 - `setup.cmd` / `setup.ps1`: one-click Windows setup for people running from source. Checks Git and Node.js (offers to install Node LTS with winget), puts local `package.json` / `package-lock.json` changes aside so `git pull` works, runs `npm install` with retries, then builds and launches the installer or runs `npm start`.
-- Node.js **22 or newer** is now required to build (`engines` in `package.json`); electron-builder's dependencies need it.
+- Node.js **22.12 or newer** is now required to build (`engines` in `package.json`); Electron's npm package and electron-builder's dependencies need it.
+- **Upgraded Electron 31 → 45** (45.3.2: Chromium 156, Node 24.22). Electron 31 is out of support and had open security advisories.
+  - System audio: Electron 45 reports `getUserMedia` desktop capture as a `display-capture` permission instead of `media`, which the old handler denied, so system audio would have silently stopped working. Main now grants `display-capture` to Echo's own page only for a few seconds after `desktop:get-audio-source`, and `media` video (the camera) only while hand gestures are on (it no longer needs the desktop-capture window).
+  - Keys: `keyStore.js` uses `safeStorage`'s async API (the sync one is deprecated in 45 and removed in 46). Keys saved by earlier versions still decrypt; the saved keys are decrypted once at startup.
+  - `clipboard.writeText` in main is awaited (a Promise since Electron 44); the renderer `console-message` forwarder uses the event-object form only.
+  - The Electron runtime is no longer downloaded by `npm install` (Electron 42+): the first `npm start` downloads it, `npm run dist` / `npm run pack` download it first, and `npm run electron:fetch` does it by hand. `setup.cmd` fetches it right after `npm install`, with retries.
 
 ## 0.1.0
 
