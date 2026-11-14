@@ -23,7 +23,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Electron 45 runs its main process on Node 24.
+          node-version: 24
           cache: npm
 
       - name: Check the tag matches package.json
@@ -61,9 +62,12 @@ jobs:
       - name: Run tests
         run: npm test
 
-      # `predist` re-checks the hand-gesture files and fails if any are missing,
-      # so a release never ships without them. Retried for the same 504 reason;
-      # files already downloaded are cached, so each retry gets further.
+      # `predist` downloads the Electron binary into node_modules/electron/dist
+      # (`npm ci` doesn't, since Electron 42; electron-builder packages that
+      # folder via `electronDist`), then re-checks the hand-gesture files and
+      # fails if any are missing, so a release never ships without them.
+      # Retried for the same 504 reason; files already downloaded are cached,
+      # so each retry gets further.
       - name: Build installer (dist/Echo-Setup-<version>.exe)
         shell: bash
         run: |
