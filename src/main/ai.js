@@ -266,13 +266,19 @@ const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You"
 // Words and patterns that make an answer sound machine-written when said
 // out loud. humanize.js also strips em dashes and stock openers afterwards,
 // as a safety net.
-const BANNED_TELLS = `Never use these AI tells: "Great question", "Certainly", "Absolutely", "I'd be happy to", "leverage", "delve", "utilize", "passionate about", "spearheaded", "synergy", "robust", "seamless", "cutting-edge", "game-changer", "it's worth noting", "in summary", "in conclusion", "overall", "Not only X but also Y" constructions, and neat lists of three adjectives ("fast, scalable and reliable"). Never use em dashes (—): use a comma or a full stop, or start a new sentence.`;
+const BANNED_TELLS = `Never use these AI tells: "Great question", "Certainly", "Absolutely", "I'd be happy to", "leverage", "delve", "utilize", "passionate about", "spearheaded", "synergy", "robust", "seamless", "cutting-edge", "game-changer", "it's worth noting", "in summary", "in conclusion", "overall", "furthermore", "moreover", "additionally", "I'm excited to", "thrilled", "a testament to", "navigate", "foster", "holistic", "dive into", "key takeaway", "in today's fast-paced world", "Not only X but also Y" constructions, and neat lists of three adjectives ("fast, scalable and reliable"). Never use em dashes (—): use a comma or a full stop, or start a new sentence.`;
 
 const HUMAN_VOICE = `\nSound like a real person talking, not like an AI or a cover letter:
 - Use contractions (I'm, I've, it's, didn't, that's) and plain everyday words: "use", not "utilize"; "helped build", not "spearheaded".
 - Keep sentences short and vary their length. A four-word sentence is fine. Talk in the first person ("I", or "we" for a team).
 - Concrete beats polished: name the actual project, tool, number or result instead of a general claim about yourself.
 - Now and then (not in every answer) it's fine to open the way people really do: "So,", "Yeah, so", "Honestly,". Most answers should just start with the point.
+- Talk like a smart friend explaining something across a table, not like someone presenting slides. Answer what was actually asked; never repeat the question back.
+- Don't make it too tidy. Real answers aren't perfectly symmetrical: don't always give exactly three points, don't make every sentence the same shape, and don't wrap up with a neat moral ("That taught me the value of teamwork"). End on a concrete detail, or just stop.
+- People mention the messy part: what was hard, what went wrong first, what they'd do differently. One honest detail like that makes it sound real.
+- Say numbers the way people say them out loud: "about a third", "around 200 users", "a couple of weeks", not "33.7%" or "a 2-week period".
+- Light, natural hedging is fine where a person would use it ("I think", "probably", "if I remember right"), but stay confident about the user's own facts and never hedge every sentence.
+- Match how the user actually talks: look at their own "You" lines in the transcript and mirror their vocabulary and how formal or casual they are. Match the other person's tone too (casual chat vs a formal panel).
 - ${BANNED_TELLS}
 
 Examples of the difference. They show TONE only: never reuse their facts.
@@ -1052,7 +1058,7 @@ const HEADLINE_SITUATIONS = {
 function buildHeadlineSystemPrompt(mode) {
   const situation = Object.prototype.hasOwnProperty.call(HEADLINE_SITUATIONS, mode) ? HEADLINE_SITUATIONS[mode] : HEADLINE_SITUATIONS.general;
   return `${situation} Give ONLY the first sentence the user should say out loud right now, in their own voice, in reply to the latest question. A fuller answer is being written separately and follows a moment later; your sentence is what they start talking with while it loads.
-- Exactly one short spoken sentence (under 25 words), first person, contractions, plain everyday words. It directly answers the question, or opens the answer, and works on its own.
+- Exactly one short spoken sentence (under 25 words), first person, contractions, plain everyday words. It directly answers the question, or opens the answer, and works on its own. It should sound like how a real person naturally starts talking, not a polished opening line.
 - No preamble, no quotation marks around it, no labels, no markdown, no lists, no code.
 - A NEW coding, maths or design problem: say how you'd start (briefly restate what's asked, or the approach you're sure of). Never state a final number or claim you aren't sure of.
 - A follow-up about code already discussed (why X, what if, complexity, testing, edge cases): the direct answer in one line, consistent with the earlier answers.
