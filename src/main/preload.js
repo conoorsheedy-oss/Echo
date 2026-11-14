@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('assistant', {
   copyText: (text) => ipcRenderer.invoke('clipboard:write-text', { text }),
 
   hideWindow: () => ipcRenderer.send('window:hide'),
+  quitApp: () => ipcRenderer.send('app:quit'),
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
   setCompact: (enabled) => ipcRenderer.invoke('window:set-compact', { enabled }),
   onCompactChanged: (cb) => ipcRenderer.on('window:compact-changed', (_e, val) => cb(val)),

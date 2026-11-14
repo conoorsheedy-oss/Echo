@@ -518,6 +518,13 @@ function registerShortcuts() {
   });
 }
 
+// One Echo at a time: launching it again (e.g. from the desktop shortcut)
+// brings the running window back instead of starting a hidden second copy.
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0);
+}
+app.on('second-instance', () => showOverlay());
+
 app.whenReady().then(() => {
   // Permissions: deny by default. Our own overlay page gets the mic and
   // system audio without a prompt (so getUserMedia doesn't stall), the
@@ -553,12 +560,11 @@ app.whenReady().then(() => {
   });
 });
 
-// The tray is the way to quit; only quit on window-all-closed without one.
+// Closing the window (the × button, Alt+F4) quits Echo. "Hide Echo" in the
+// ⋯ menu / Ctrl+Shift+Space / the tray hide it but keep it running.
 app.on('window-all-closed', () => {
-  if (!tray) {
-    globalShortcut.unregisterAll();
-    if (process.platform !== 'darwin') app.quit();
-  }
+  globalShortcut.unregisterAll();
+  if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('will-quit', () => {
@@ -1092,4 +1098,8 @@ handle('clipboard:write-text', async (_evt, { text } = {}) => {
 // Minimize = hide: with skipTaskbar a minimized window has no way back, so
 // both buttons hide it (the tray icon / Ctrl+Shift+Space bring it back).
 ipcMain.on('window:hide', () => overlayWindow?.hide());
+ipcMain.on('app:quit', (event) => {
+  if (!overlayWindow || event.sender !== overlayWindow.webContents) return;
+  app.quit();
+});
 ipcMain.on('window:minimize', () => overlayWindow?.hide());

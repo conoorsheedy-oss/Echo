@@ -454,7 +454,13 @@ refreshScreenSources();
 refreshKnowledgeStatus();
 
 minimizeBtn.addEventListener('click', () => api.minimizeWindow());
-hideBtn.addEventListener('click', () => api.hideWindow());
+// × quits Echo completely (stopping any session first).
+async function quitEcho() {
+  try { if (listening) await stopListening(); } catch (e) { /* quitting anyway */ }
+  api.quitApp();
+}
+hideBtn.addEventListener('click', quitEcho);
+document.getElementById('quit-menu-btn').addEventListener('click', quitEcho);
 
 api.onGenerateHotkey(() => requestSuggestion(undefined, { question: null }));
 api.onClearHotkey(() => clearTranscript());
