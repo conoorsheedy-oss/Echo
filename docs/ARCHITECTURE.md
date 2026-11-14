@@ -33,6 +33,14 @@ Echo is a plain Electron app: no framework, no bundler. Three pieces:
 - **Preload** exposes a fixed list of functions as `window.assistant`. `renderer.js` wraps it as `api` (it can't be a top-level `const assistant`: that clashes with the `window.assistant` global and kills the script). The wrapper restores `err.code` / `err.status` from errors (main tags them onto the message, because IPC only carries the message).
 - **Renderer** is the UI. It never sees an API key and has no Node access (`contextIsolation: true`, `nodeIntegration: false`).
 
+### Renderer layout
+
+`index.html` is three rows inside `#app`: the top bar (`#header`: status dot, status badges, Start/Stop, mode, `⋯` menu, compact, hide), the answer card (`#suggestion-section`: Script / Cues toggle, **New answer ready** chip and Generate in its header, the answer text or an empty state, and the Shorten / Expand / Regenerate / Copy toolbar as its footer), and the dock (`#dock`). Transcript, chat, knowledge base and screen context are `.drawer` sections inside `#drawers`, absolutely positioned above the dock; `setOpenDrawer()` in `renderer.js` shows one at a time and `Esc` closes the topmost thing (menu, full-window panel, drawer). Dock badges (unread transcript lines, knowledge files, attached screenshots) are set with `setDockBadge()`. Settings, Summary and Diagnostics are full-window panels on top.
+
+- **IDs are the contract.** `renderer.js` and `gestures.js` look elements up by ID, and gestures fire actions by clicking the real buttons (`#generate-btn`, `#listen-btn`, `#capture-screen-btn`, `#clear-screen-btn`, the Copy button in `#suggestion-actions`). Move elements freely, but keep the IDs.
+- **Icons** are an inline SVG sprite at the top of `index.html` (`<symbol id="i-…">`, 24px grid, stroke only), used as `<svg class="icon"><use href="#i-name"/></svg>`. They were drawn for Echo; there is no icon font or remote asset (the CSP allows none). Buttons with an icon keep their text in a `.btn-label` / `.menu-label` span, and code changes it with `setBtnLabel()` so the icon survives.
+- **Styles** are token-based (`:root` in `styles.css`): one spacing scale, one radius scale, one icon size. Compact bar (`#app.compact`) and Focus mode (`#app.suggestion-expanded`) are classes on `#app` that hide rows.
+
 ## IPC channels
 
 All `invoke` channels are handled in `main.js` with `handle()`, which validates payloads.
@@ -51,7 +59,7 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 
 ## Speech-to-text flow
 
-1. **Start Listening** opens the mic and system audio (a desktop-capture stream whose video track is dropped).
+1. **Start** opens the mic and system audio (a desktop-capture stream whose video track is dropped).
 2. Each stream gets its own Web Audio `AnalyserNode` (never connected to the speakers) and its own `VadSegmenter` from `vad-core.js`. Every 40 ms the renderer reads the RMS loudness of the last ~21 ms of samples and feeds it to the segmenter.
 3. A `MediaRecorder` is **always running** on each stream, so the first syllable is never lost waiting for "speech started". The segmenter answers each reading with:
    - **cut**: speech happened and then `SILENCE_MS` (550 ms; was 700 ms) of quiet followed, or someone talked for `MAX_CHUNK_MS` (12 s) without pausing. The next recorder starts first, then the finished one stops and uploads. One recorder per chunk means every chunk is a complete, standalone webm/opus file.
@@ -65,7 +73,7 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 
 ## Live speech-to-text with Deepgram (optional)
 
-Settings > **Speech-to-text** picks the provider (`renderer.js` keeps it in `localStorage` as `echo.sttProvider`; it applies on the next Start Listening). `stt-core.js` decides what Start needs: Gemini always, plus Groq (Groq mode) or Deepgram (Deepgram mode). In Deepgram mode Groq is optional and only used as the fallback.
+Settings > **Speech-to-text** picks the provider (`renderer.js` keeps it in `localStorage` as `echo.sttProvider`; it applies on the next Start). `stt-core.js` decides what Start needs: Gemini always, plus Groq (Groq mode) or Deepgram (Deepgram mode). In Deepgram mode Groq is optional and only used as the fallback.
 
 ```
 mic / system audio ─► MediaStreamSource ─┬─► AnalyserNode ─► VadSegmenter (halo + "someone is talking")
@@ -161,4 +169,4 @@ Prompts live in `ai.js`:
 - `test/deepgram-core.test.js`: listen URL, message parsing, the interim/final assembler (`speech_final`, `UtteranceEnd`, length cuts, `Finalize` flushes), error/close classification, backoff and KeepAlive/Finalize timing, PCM frame validation.
 - `test/deepgram-stream.test.js`: `deepgram.js` with a fake WebSocket and clock (auth header, 401/402/429/offline, queueing, KeepAlive, CloseStream, reconnect then fatal error) and the Deepgram key test with `fetch` mocked.
 - `test/pcm-core.test.js`: downsampling (48 / 44.1 kHz → 16 kHz, no drift), Int16 conversion, framing and the talk-only audio gate.
-- `test/stt-core.test.js`: which keys Start Listening needs per provider, and the banner text.
+- `test/stt-core.test.js`: which keys Start needs per provider, and the banner text.

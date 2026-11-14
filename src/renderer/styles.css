@@ -1,15 +1,16 @@
 /* =====================================================================
    Echo overlay -- styles
-   A small, translucent, always-on-top panel people glance at mid-call:
-   calm, high-contrast, legible at a glance, compact. Dark theme only.
+   A small, translucent, always-on-top panel people glance at mid-call.
+   The answer card is the hero; everything else stays out of its way.
+   Dark theme only.
 
-     1. Tokens (colour, type, spacing, radii, shadow, motion)
-     2. Base + controls (buttons, inputs, selects, chips, scrollbars)
-     3. Window chrome (app shell, header, status pills, menu)
-     4. Main layout (controls row, sections, suggestion panel)
-     5. Secondary panels (transcript, chat, knowledge, screen tray)
+     1. Tokens (colour, type, spacing, radii, icon size, shadow, motion)
+     2. Base + controls (buttons, inputs, selects, switches, icons)
+     3. Top bar (status, Start/Stop, mode, menu, window controls)
+     4. Answer card (header, text, empty state, action toolbar)
+     5. Dock + drawers (transcript, chat, knowledge, screen tray)
      6. Banner + toast
-     7. Overlays (settings, summary, diagnostics)
+     7. Full-window panels (settings, summary, diagnostics)
      8. Modes (compact bar, focus, narrow widths)
      9. Hand gestures (experimental, opt-in)
     10. Motion + reduced motion
@@ -25,8 +26,7 @@
      over bright windows; blur + a hairline border keep it feeling light. */
   --bg-app: rgba(16, 17, 21, 0.955);
   --bg-overlay: rgba(16, 17, 21, 0.985);
-  --bg-raised: #1f2027;          /* menu, toast: floats above everything */
-  --bg-sticky: #1b1c21;          /* answer action row (opaque, scrolls over text) */
+  --bg-raised: #1f2027;          /* menu, toast, drawers: float above everything */
   --dot-idle: #5c5d68;
   --surface-1: rgba(255, 255, 255, 0.035);
   --surface-2: rgba(255, 255, 255, 0.065);
@@ -76,9 +76,9 @@
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-md: 13px;
-  --fs-lg: 14.5px;
-  --fs-xl: 16.5px;
-  --fs-2xl: 20px;
+  --fs-lg: 15px;   /* answer body */
+  --fs-xl: 17px;   /* compact-bar first line */
+  --fs-2xl: 21px;  /* the answer's big first line */
   --lh-tight: 1.3;
   --lh-ui: 1.4;
   --lh-read: 1.6;
@@ -94,14 +94,23 @@
   --sp-8: 20px;
   --sp-9: 24px;
 
-  /* Radii */
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 10px;
-  --r-xl: 12px;
+  /* Radii: one scale */
+  --r-xs: 4px;      /* inline code, tiny labels */
+  --r-sm: 6px;      /* icon buttons, menu rows */
+  --r-md: 8px;      /* inputs, buttons, thumbnails */
+  --r-lg: 12px;     /* cards, drawers, menu */
   --r-window: 14px;
   --r-pill: 999px;
+
+  /* Icons: one size everywhere (status badges use the small one) */
+  --icon: 17px;
+  --icon-sm: 13px;
+  --icon-stroke: 1.8;
+
+  /* Fixed rows */
+  --bar-h: 44px;
+  --dock-h: 44px;
+  --ctl-h: 28px;    /* icon buttons, chips, small buttons */
 
   /* Shadows */
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
@@ -217,37 +226,135 @@ button.primary.recording:hover {
   border-color: var(--danger-fill-hover);
 }
 
-/* Ghost: icon buttons, close buttons, panel-header actions */
-.icon-btn,
-#close-summary-btn,
-#close-diagnostics-btn,
-#close-settings-btn {
-  width: 26px;
-  height: 26px;
-  padding: 0 !important;
+/* Icons: inline <svg class="icon"><use href="#i-..."/></svg> from the sprite
+   at the top of index.html. Stroke-only, inherits the text colour. */
+.sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.icon {
+  width: var(--icon);
+  height: var(--icon);
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--icon-stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none; /* clicks land on the button, never the drawing */
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Buttons with an icon + label */
+button:has(> .icon) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: var(--sp-3);
+}
+
+/* Ghost icon button: top bar, drawer and panel headers */
+.icon-btn {
+  width: var(--ctl-h);
+  height: var(--ctl-h);
+  padding: 0;
   flex-shrink: 0;
-  font-size: 15px;
-  line-height: 1;
   background: transparent;
   border-color: transparent;
   border-radius: var(--r-sm);
   color: var(--text-muted);
 }
-.icon-btn:hover,
-#close-summary-btn:hover,
-#close-diagnostics-btn:hover,
-#close-settings-btn:hover {
+.icon-btn:hover {
   background: var(--surface-3);
   border-color: transparent;
   color: var(--text-strong);
 }
-#close-summary-btn,
-#close-diagnostics-btn,
-#close-settings-btn {
-  font-size: 17px;
+.icon-btn:disabled,
+.icon-btn:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* Soft accent button: the secondary "do it" (Generate, Add files, Ask) */
+button.soft,
+#generate-btn,
+.send-btn {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+button.soft:hover,
+#generate-btn:hover,
+.send-btn:hover {
+  background: var(--accent-soft-hover);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Switch: every on/off setting uses this */
+input.switch {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-4);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+input.switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d5d6de;
+  transition: transform var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+input.switch:checked {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+}
+input.switch:checked::before {
+  transform: translateX(12px);
+  background: #fff;
+}
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-6);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+  color: var(--text);
+  cursor: pointer;
+}
+
+kbd {
+  font-family: inherit;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  color: var(--text-subtle);
+  white-space: nowrap;
 }
 
 /* Text inputs */
@@ -304,27 +411,6 @@ option {
   color: var(--text);
 }
 
-/* Chips / pills */
-.indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  line-height: 1;
-  padding: 4px var(--sp-4);
-  border-radius: var(--r-pill);
-  background: var(--surface-2);
-  color: var(--text-subtle);
-  white-space: nowrap;
-  cursor: default;
-  font-variant-numeric: tabular-nums;
-}
-.indicator.active {
-  background: var(--success-soft);
-  color: var(--success);
-}
-
 /* Scrollbars: thin, quiet, only visible on hover-ish contrast */
 ::-webkit-scrollbar {
   width: 8px;
@@ -360,7 +446,7 @@ option {
 }
 
 /* ---------------------------------------------------------------------
-   3. Window chrome
+   3. Top bar
    --------------------------------------------------------------------- */
 #app {
   position: relative;
@@ -376,26 +462,25 @@ option {
   backdrop-filter: blur(18px) saturate(1.2);
 }
 
+/* One slim row. The whole bar drags the window; controls opt out. */
 #header {
   -webkit-app-region: drag;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-4);
-  min-height: 42px;
-  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-6);
-  background: transparent;
-  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--bar-h);
+  padding: 0 var(--sp-3) 0 var(--sp-6);
   flex-shrink: 0;
 }
 
 #drag-handle {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: var(--sp-3);
   min-width: 0;
   overflow: hidden;
-  font-weight: 600;
+  align-self: stretch;
 }
 
 #title {
@@ -404,65 +489,116 @@ option {
   letter-spacing: 0.01em;
   color: var(--text-strong);
   white-space: nowrap;
+  margin-right: var(--sp-1);
 }
 
-/* Status dot: grey idle, green + soft ripple while live */
+/* Status dot: grey idle, green while listening */
 .dot {
-  position: relative;
   width: 8px;
   height: 8px;
   flex-shrink: 0;
   border-radius: 50%;
   background: var(--dot-idle);
-  display: inline-block;
+  transition: background-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 .dot.live {
   background: var(--success);
-  box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.5);
-  animation: echo-ripple 2s var(--ease) infinite;
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
 }
 
-/* Header state pills: Live / Thinking / Privacy / Hidden */
-#live-badge,
-#thinking-indicator,
-#privacy-badge,
-#content-protection-badge {
+/* Status badges: icon-only, and only there while the state is on
+   (Thinking / Privacy / Hidden from screen share / Gestures). */
+.status-badge {
+  -webkit-app-region: no-drag; /* so the tooltip shows */
   display: inline-flex;
   align-items: center;
-  font-size: var(--fs-2xs);
-  font-weight: 700;
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 4px 7px;
-  border-radius: var(--r-pill);
-  white-space: nowrap;
+  justify-content: center;
   flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-pill);
 }
-#live-badge { background: var(--success-soft); color: var(--success); }
-#thinking-indicator { background: var(--accent-soft); color: var(--accent-text); }
-#privacy-badge { background: var(--warn-soft); color: var(--warn); }
-#content-protection-badge { background: var(--danger-soft); color: var(--danger); }
-
-#thinking-indicator::after {
-  content: '';
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  margin-left: 5px;
+.status-badge .icon {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  stroke-width: 2.1;
+}
+#thinking-indicator {
+  width: auto;
+  gap: 3px;
+  padding: 0 7px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.think-dot {
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
   background: currentColor;
-  animation: echo-blink 0.9s ease-in-out infinite;
+  animation: echo-blink 1.1s ease-in-out infinite;
 }
+.think-dot:nth-child(3) { animation-delay: 0.18s; }
+.think-dot:nth-child(4) { animation-delay: 0.36s; }
+#privacy-badge { background: var(--warn-soft); color: var(--warn); }
+#content-protection-badge { background: var(--danger-soft); color: var(--danger); }
+#gesture-badge { background: var(--accent-soft); color: var(--accent-text); }
+#gesture-badge:hover { background: var(--accent-soft-hover); border: none; }
 
 #header-actions {
   -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   flex-shrink: 0;
 }
 
+/* Start / Stop: the one filled button in the bar */
+#listen-btn {
+  height: 30px;
+  padding: 0 var(--sp-6) 0 var(--sp-5);
+  font-size: var(--fs-md);
+  border-radius: var(--r-pill);
+}
+#listen-btn .i-stop {
+  display: none;
+  fill: currentColor;
+  stroke: none;
+}
+#listen-btn.recording .i-start { display: none; }
+#listen-btn.recording .i-stop { display: block; }
+#listen-btn.recording {
+  animation: echo-live-pulse 2.4s var(--ease) infinite;
+}
+#listen-btn.recording:focus-visible {
+  animation: none; /* the pulse would paint over the focus ring */
+}
+#listen-btn:disabled,
+#listen-btn:disabled:hover {
+  opacity: 0.6;
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+}
+
+/* Mode: a quiet chip */
+#mode-select {
+  width: 104px;
+  height: 30px;
+  padding: 0 24px 0 var(--sp-5);
+  border-radius: var(--r-pill);
+  background-color: transparent;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+#mode-select:hover {
+  background-color: var(--surface-2);
+  color: var(--text-strong);
+}
+
+#compact-btn .i-to-full { display: none; }
+#compact-btn.active .i-to-compact { display: none; }
+#compact-btn.active .i-to-full { display: block; }
 #compact-btn.active {
   color: var(--accent-text);
   background: var(--accent-soft);
@@ -474,17 +610,18 @@ option {
 
 /* "..." menu */
 #menu-wrap { position: relative; }
-#menu-wrap:has(#menu:not(.hidden)) #menu-btn {
+#menu-btn[aria-expanded="true"] {
   background: var(--surface-3);
   color: var(--text-strong);
 }
 #menu {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
+  right: calc(-2 * var(--ctl-h) - var(--sp-2));
   z-index: 40;
-  min-width: 216px;
-  max-width: calc(100vw - 24px);
+  width: max-content;
+  min-width: 232px;
+  max-width: calc(100vw - 16px);
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
@@ -498,16 +635,21 @@ option {
 }
 #menu button {
   width: 100%;
-  text-align: left;
-  padding: var(--sp-4) var(--sp-5);
+  justify-content: flex-start;
+  gap: var(--sp-5);
+  min-height: 32px;
+  padding: var(--sp-3) var(--sp-5);
   font-size: var(--fs-md);
   font-weight: 450;
   color: var(--text);
+  text-align: left;
   background: transparent;
   border: none;
   border-radius: var(--r-sm);
   white-space: normal;
 }
+#menu button .icon { color: var(--text-muted); }
+#menu .menu-label { flex: 1 1 auto; }
 #menu button:hover,
 #menu button:focus-visible {
   background: var(--surface-3);
@@ -517,227 +659,111 @@ option {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-#menu #hide-from-share-btn.active {
-  color: var(--danger);
-  background: var(--danger-soft);
+#menu hr {
+  width: 100%;
+  height: 1px;
+  margin: var(--sp-1) 0;
+  border: none;
+  background: var(--border-subtle);
 }
+#menu #hide-from-share-btn.active,
+#menu #hide-from-share-btn.active .icon {
+  color: var(--danger);
+}
+#menu #hide-from-share-btn.active { background: var(--danger-soft); }
+#menu #gestures-menu-btn.active,
+#menu #gestures-menu-btn.active .icon,
+#menu #expand-suggestion-btn[aria-pressed="true"],
+#menu #expand-suggestion-btn[aria-pressed="true"] .icon {
+  color: var(--accent-text);
+}
+#menu #gestures-menu-btn.active,
+#menu #expand-suggestion-btn[aria-pressed="true"] { background: var(--accent-soft); }
 
 /* ---------------------------------------------------------------------
-   4. Main layout
+   4. Answer card -- the hero. Takes all the height the bar and dock
+      leave; nothing else on screen competes with it.
    --------------------------------------------------------------------- */
-/* Start/Stop + mode on one row, audio chips underneath */
-#controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
-  gap: var(--sp-4);
-  padding: var(--sp-5) var(--sp-6) var(--sp-3);
-  flex-shrink: 0;
-}
-#listen-btn {
-  flex: 1 1 150px;
-  min-height: 38px;
-  padding: var(--sp-4) var(--sp-7);
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  letter-spacing: 0.005em;
-  border-radius: var(--r-lg);
-}
-#listen-btn:disabled {
-  opacity: 0.75;
-  cursor: progress;
-}
-#mode-select {
-  flex: 0 0 auto;
-  min-height: 38px;
-  padding: 0 30px 0 var(--sp-5);
-  border-radius: var(--r-lg);
-  font-size: var(--fs-md);
-  font-weight: 500;
-}
-#audio-indicators {
-  flex: 1 0 100%;
-  display: flex;
-  gap: var(--sp-3);
-}
-/* Little status dot inside the Mic / System audio chips */
-#audio-indicators .indicator::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.55;
-}
-#audio-indicators .indicator.active::before { opacity: 1; }
-/* Voice detected on that stream right now (VAD in renderer.js): a halo on
-   the dot, no layout change. */
-#audio-indicators .indicator.speaking::before { box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.35); }
-
-/* Sections. The suggestion panel takes the free space; the rest collapse.
-   `order` puts the suggestion panel first without changing the DOM (tab) order. */
-section {
-  padding: var(--sp-3) var(--sp-6);
-  border-top: 1px solid var(--border-subtle);
+#suggestion-section {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  margin: 0 var(--sp-4);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
 }
 
-#suggestion-section { order: 1; flex: 1 1 auto; min-height: 140px; border-top: none; padding: var(--sp-4) var(--sp-6) var(--sp-5); }
-#transcript-section { order: 2; flex: 0 0 190px; }
-#chat-section       { order: 3; flex: 0 0 150px; }
-#knowledge-section  { order: 4; flex: 0 0 auto; }
-#screen-section     { order: 5; flex: 0 0 auto; }
-
-/* Section header row */
-.section-label {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-subtle);
+/* Card header: Script/Cues on the left; "New answer ready" + Generate right */
+.card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--sp-3);
-  margin-bottom: var(--sp-2);
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-4) var(--sp-2) var(--sp-5);
   flex-shrink: 0;
   min-width: 0;
 }
-.section-title {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.section-label-actions {
+.card-head-actions {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  flex-shrink: 0;
+  gap: var(--sp-3);
+  min-width: 0;
 }
-.section-label button {
-  padding: 4px var(--sp-4);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  text-transform: none;
-  letter-spacing: 0;
-  border-radius: var(--r-sm);
-}
-/* Generate = soft accent; Focus = ghost */
-#generate-btn {
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-  color: var(--accent-text);
-  font-weight: 600;
-}
-#generate-btn:hover {
-  background: var(--accent-soft-hover);
-  border-color: var(--accent);
-  color: #fff;
-}
-#expand-suggestion-btn {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-muted);
-}
-#expand-suggestion-btn:hover {
-  background: var(--surface-3);
-  color: var(--text-strong);
-}
-/* Script / Cues quick toggle: a small ghost chip, accent-tinted on Cues. */
-#answer-style-chip {
-  background: transparent;
-  border-color: var(--border);
-  color: var(--text-muted);
+
+/* Script | Cues: one button drawn as a two-segment toggle (.active = Cues) */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  height: var(--ctl-h);
+  padding: 2px;
+  gap: 0;
   border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border-color: var(--border-subtle);
 }
-#answer-style-chip:hover {
-  background: var(--surface-3);
+.segmented:hover {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.segmented .seg {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--sp-5);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-subtle);
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.segmented:hover .seg { color: var(--text-muted); }
+.segmented:not(.active) .seg-script,
+.segmented.active .seg-cues {
+  background: var(--surface-4);
   color: var(--text-strong);
 }
-#answer-style-chip.active {
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-  color: var(--accent-text);
-}
 
-/* Collapsible sections: whole header row toggles */
-section.collapsible {
-  padding: 0 var(--sp-6);
+#generate-btn {
+  height: var(--ctl-h);
+  padding: 0 var(--sp-5) 0 var(--sp-4);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
 }
-section.collapsible > .section-label {
-  margin: 0 calc(-1 * var(--sp-3));
-  padding: var(--sp-3) var(--sp-3);
-  min-height: 34px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  user-select: none;
-  transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
-}
-section.collapsible > .section-label:hover {
-  color: var(--text-muted);
-  background: var(--surface-1);
-}
-section.collapsible .section-title {
-  display: block;
-}
-section.collapsible .section-title::before {
-  content: '';
-  display: inline-block;
-  vertical-align: 1px;
-  width: 0;
-  height: 0;
-  margin: 0 8px 0 3px;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid currentColor;
-  opacity: 0.8;
-  transition: transform var(--dur) var(--ease);
-}
-section.collapsible.collapsed .section-title::before { transform: rotate(-90deg); }
-section.collapsible.collapsed {
-  flex: 0 0 auto !important;
-  height: auto !important;
-  min-height: 0 !important;
-}
-section.collapsible.collapsed > :not(.section-label) { display: none !important; }
-section.collapsible.collapsed > .section-label button { display: none; }
-section.collapsible:not(.collapsed) {
-  padding-bottom: var(--sp-5);
-  /* Open panels give up height on short windows instead of pushing later
-     sections off the bottom (!important beats the per-id flex below). */
-  flex-shrink: 1 !important;
-}
-#transcript-section:not(.collapsed),
-#chat-section:not(.collapsed) {
-  min-height: 84px;
-}
-/* These two size to their content and never get squashed */
-#knowledge-section:not(.collapsed),
-#screen-section:not(.collapsed) {
-  flex-shrink: 0 !important;
-}
-
-/* ---- Suggested response ---- */
-#suggestion-section .section-label { margin-bottom: var(--sp-3); }
 
 #suggestion-body {
   position: relative;
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  padding: var(--sp-6) var(--sp-7) var(--sp-6);
-  box-shadow: var(--shadow-card);
-  transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+  padding: var(--sp-5) var(--sp-8) var(--sp-7);
 }
 
 /* The question being answered: small, muted, quote-ruled */
@@ -745,7 +771,7 @@ section.collapsible:not(.collapsed) {
   font-size: var(--fs-sm);
   line-height: 1.45;
   color: var(--text-subtle);
-  margin-bottom: var(--sp-5);
+  margin-bottom: var(--sp-6);
   padding-left: var(--sp-4);
   border-left: 2px solid var(--accent-border);
   display: -webkit-box;
@@ -763,30 +789,77 @@ section.collapsible:not(.collapsed) {
   background: var(--danger-soft);
   border-radius: var(--r-md);
   padding: var(--sp-3) var(--sp-5);
-  margin-bottom: var(--sp-5);
+  margin-bottom: var(--sp-6);
   overflow-wrap: anywhere;
   flex-shrink: 0;
 }
 
-#suggestion-placeholder {
-  font-size: var(--fs-md);
-  line-height: 1.55;
-  color: var(--text-subtle);
+/* Empty state: an icon and one line, nothing to read */
+.empty-state {
   margin: auto 0;
-  padding: var(--sp-4) var(--sp-2);
+  padding: var(--sp-4) var(--sp-2) var(--sp-9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
   text-align: center;
+}
+.empty-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: var(--sp-4);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.empty-icon .icon {
+  display: none;
+  width: 22px;
+  height: 22px;
+  stroke-width: 1.7;
+}
+.empty-state[data-state="idle"] .e-idle,
+.empty-state[data-state="thinking"] .e-idle,
+.empty-state[data-state="listening"] .e-listening,
+.empty-state[data-state="keys"] .e-keys { display: block; }
+.empty-state[data-state="listening"] .empty-icon {
+  background: var(--success-soft);
+  color: var(--success);
+  animation: echo-ripple 2.4s var(--ease) infinite;
+}
+.empty-state[data-state="thinking"] .empty-icon {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.empty-state[data-state="thinking"] .empty-icon .icon { animation: echo-blink 1.1s ease-in-out infinite; }
+.empty-state p {
+  margin: 0;
+  max-width: 26ch;
   text-wrap: balance;
 }
+#suggestion-placeholder-title {
+  font-size: var(--fs-lg);
+  font-weight: 550;
+  line-height: 1.4;
+  color: var(--text);
+}
+#suggestion-placeholder-hint {
+  max-width: 36ch;
+  font-size: var(--fs-sm);
+  color: var(--text-subtle);
+}
+#suggestion-placeholder-hint:empty { display: none; }
 
 /* Read-at-a-glance body text */
 #suggestion-text {
   font-size: var(--fs-lg);
   line-height: var(--lh-read);
   color: var(--text);
-  margin-bottom: 0;
   overflow-wrap: anywhere;
   min-width: 0;
-  flex: 1 0 auto; /* pushes grounding + actions to the bottom */
+  flex: 1 0 auto; /* pushes grounding to the bottom */
 }
 /* Big first line: the answer's first sentence, rendered as soon as it starts
    streaming so you can start talking while the rest arrives
@@ -795,92 +868,104 @@ section.collapsible:not(.collapsed) {
 #suggestion-text p.headline {
   font-size: var(--fs-2xl);
   font-weight: 650;
-  line-height: 1.34;
-  letter-spacing: -0.01em;
+  line-height: 1.32;
+  letter-spacing: -0.012em;
   color: var(--text-strong);
-  margin-bottom: var(--sp-5);
+  margin-bottom: var(--sp-6);
 }
 /* Script answers: one sentence per line, with a little breathing room. */
 #suggestion-text .sentence {
   display: block;
 }
 #suggestion-text .sentence + .sentence {
-  margin-top: var(--sp-3);
+  margin-top: var(--sp-4);
 }
 /* Cues answers: the keyword list a bit roomier. */
 #suggestion-text[data-style="cues"] li {
-  margin-bottom: var(--sp-3);
+  margin-bottom: var(--sp-4);
 }
 #suggestion-text[data-style="cues"] li strong {
   color: var(--accent-text);
 }
 
-/* Action row sticks to the bottom of the answer box so Copy etc. are
-   always one click away, even on a long answer. */
-#suggestion-actions {
-  position: sticky;
-  bottom: calc(-1 * var(--sp-6));
-  z-index: 1;
-  display: flex;
-  gap: var(--sp-3);
-  flex-wrap: wrap;
-  order: 3;
-  margin: var(--sp-5) calc(-1 * var(--sp-7)) calc(-1 * var(--sp-6));
-  padding: var(--sp-4) var(--sp-7) var(--sp-5);
-  background: var(--bg-sticky);
-  border-top: 1px solid var(--border-subtle);
-  border-radius: 0 0 var(--r-xl) var(--r-xl);
-  flex-shrink: 0;
-}
-#suggestion-actions button {
-  padding: 5px var(--sp-5);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  border-radius: var(--r-pill);
-  color: var(--text-muted);
-  background: var(--surface-1);
-}
-#suggestion-actions button:hover {
-  color: var(--text-strong);
-  background: var(--surface-3);
-}
-#suggestion-actions button[data-action="copy"] {
-  margin-left: auto;
-  color: var(--accent-text);
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-}
-#suggestion-actions button[data-action="copy"]:hover {
-  background: var(--accent-soft-hover);
-  color: #fff;
-}
-
 #suggestion-grounding {
-  order: 2;
-  margin-top: var(--sp-2);
+  margin-top: var(--sp-6);
   font-size: var(--fs-xs);
   color: var(--text-subtle);
   overflow-wrap: anywhere;
   flex-shrink: 0;
 }
 
-/* Calm answers: nothing animates on the answer itself. The header "Thinking"
-   pill and the "New answer ready" chip carry that (CALM ANSWERS in
-   renderer.js). The chip sits OUTSIDE the answer box (label row in the full
-   view, header in the compact bar) so it never covers or moves the text. */
+/* Action toolbar: the card's footer, so Copy is always one click away
+   however long the answer is. Icon buttons; Copy is the prominent one. */
+#suggestion-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.tool-btn {
+  width: 34px;
+  height: var(--ctl-h);
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+}
+.tool-btn:hover {
+  background: var(--surface-3);
+  border-color: transparent;
+  color: var(--text-strong);
+}
+.copy-btn {
+  margin-left: auto;
+  height: var(--ctl-h);
+  padding: 0 var(--sp-6) 0 var(--sp-5);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.copy-btn:hover {
+  background: var(--accent-soft-hover);
+  border-color: var(--accent);
+  color: #fff;
+}
+.copy-btn .i-check { display: none; }
+.copy-btn.copied .i-copy { display: none; }
+.copy-btn.copied .i-check { display: block; }
+.copy-btn.copied,
+.copy-btn.copied:hover {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+/* Calm answers: nothing animates on the answer itself. The top bar's
+   thinking dots and the "New answer ready" chip carry that (CALM ANSWERS in
+   renderer.js). The chip sits in the card header (the top bar in the compact
+   bar), never over the text, so it can't cover or move what's being read. */
 #app .new-answer-chip {
   -webkit-app-region: no-drag;
-  flex: 0 0 auto;
-  padding: 3px var(--sp-5);
+  flex: 0 1 auto;
+  min-width: 0;
+  height: var(--ctl-h);
+  padding: 0 var(--sp-5);
   font-size: var(--fs-xs);
   font-weight: 600;
   line-height: var(--lh-tight);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: #fff;
   background: var(--accent-fill);
   border: 1px solid var(--accent-fill);
   border-radius: var(--r-pill);
-  box-shadow: var(--shadow-pop);
 }
 #app .new-answer-chip:hover {
   color: #fff;
@@ -894,8 +979,8 @@ section.collapsible:not(.collapsed) {
   outline: none;
   box-shadow: var(--focus-ring);
 }
-/* Header copy: compact bar only (the label row is hidden there). */
-#app #new-answer-chip-compact { padding: 1px var(--sp-4); font-size: var(--fs-2xs); }
+/* Top-bar copy: compact bar only (the card header is hidden there). */
+#app #new-answer-chip-compact { height: 20px; padding: 0 var(--sp-4); font-size: var(--fs-2xs); }
 #app:not(.compact) #new-answer-chip-compact { display: none; }
 
 /* ---- Rendered markdown (suggestion, chat answers, summary) ---- */
@@ -976,15 +1061,207 @@ section.collapsible:not(.collapsed) {
 }
 
 /* ---------------------------------------------------------------------
-   5. Secondary panels
+   5. Dock + drawers
    --------------------------------------------------------------------- */
+#dock {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: var(--dock-h);
+  padding: 0 var(--sp-4);
+  flex-shrink: 0;
+}
+.dock-btn {
+  position: relative;
+  width: 40px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+}
+.dock-btn:hover {
+  background: var(--surface-3);
+  border-color: transparent;
+  color: var(--text-strong);
+}
+.dock-btn.active {
+  background: var(--surface-3);
+  color: var(--text-strong);
+}
+/* The open drawer's button gets a small accent tick underneath */
+.dock-btn.active::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 12px;
+  height: 2px;
+  margin-left: -6px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+}
+.dock-btn:disabled,
+.dock-btn:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+}
+.dock-sep { flex: 1 1 auto; }
+/* One-tap screenshot */
+.dock-capture {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+.dock-capture:hover {
+  background: var(--accent-soft-hover);
+  color: #fff;
+}
+.dock-capture:disabled,
+.dock-capture:disabled:hover {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.dock-capture.busy .icon { animation: echo-blink 0.9s ease-in-out infinite; }
+
+.dock-badge {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px #121317; /* cut out of the dock */
+  pointer-events: none;
+}
+.dock-badge.quiet {
+  background: #3a3b45;
+  color: var(--text);
+}
+
+/* Drawers slide up over the lower part of the window, above the dock.
+   One at a time (setOpenDrawer in renderer.js). */
+#drawers {
+  position: absolute;
+  left: var(--sp-4);
+  right: var(--sp-4);
+  bottom: var(--dock-h);
+  z-index: 15;
+  pointer-events: none; /* the layer itself never blocks the card */
+}
+.drawer {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  height: clamp(200px, 56vh, 460px);
+  max-height: calc(100vh - var(--bar-h) - var(--dock-h) - var(--sp-4));
+  min-width: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: echo-sheet-in var(--dur-slow) var(--ease);
+}
+.drawer.drawer-auto { height: auto; }
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 40px;
+  padding: 0 var(--sp-3) 0 var(--sp-6);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.drawer-title {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drawer-title .icon { color: var(--text-muted); }
+.drawer-actions {
+  display: flex;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-6) var(--sp-6);
+}
+.drawer-actions button {
+  flex: 1 1 0;
+  height: 32px;
+  border-radius: var(--r-md);
+}
+
+/* Mic / System audio: live in the transcript drawer's header */
+#audio-indicators {
+  display: flex;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+.indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--text-subtle);
+  white-space: nowrap;
+  cursor: default;
+}
+.indicator::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+.indicator.active {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.indicator.active::before { opacity: 1; }
+/* Voice detected on that stream right now (VAD in renderer.js): a halo on
+   the dot, no layout change. */
+.indicator.speaking::before { box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.35); }
+
 #transcript, #chat-log {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  font-size: var(--fs-sm);
+  padding: var(--sp-5) var(--sp-6);
+  font-size: var(--fs-md);
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+#transcript:empty::before,
+#chat-log:empty::before {
+  content: attr(data-empty);
+  display: block;
+  padding: var(--sp-7) var(--sp-4);
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--text-subtle);
 }
 
 .line {
@@ -1010,32 +1287,28 @@ section.collapsible:not(.collapsed) {
   color: var(--text-subtle);
 }
 
-#chat-log .line { font-size: var(--fs-sm); }
-
 #chat-form {
   display: flex;
   gap: var(--sp-3);
-  margin-top: var(--sp-4);
+  padding: var(--sp-4);
+  border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 #chat-input {
   flex: 1;
   min-width: 0;
+  height: 32px;
 }
-#chat-form button[type="submit"] {
-  padding: 0 var(--sp-6);
+.send-btn {
+  width: 36px;
+  height: 32px;
+  padding: 0;
+  flex-shrink: 0;
   border-radius: var(--r-md);
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-  color: var(--accent-text);
-  font-weight: 600;
-}
-#chat-form button[type="submit"]:hover {
-  background: var(--accent-soft-hover);
-  color: #fff;
 }
 
 #knowledge-status {
+  padding: var(--sp-6);
   font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text-muted);
@@ -1045,35 +1318,23 @@ section.collapsible:not(.collapsed) {
 /* Screen context */
 #screen-controls {
   display: flex;
-  gap: var(--sp-3);
-  align-items: stretch;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-6) var(--sp-4) 0 var(--sp-6);
 }
 #screen-source-select {
   flex: 1;
   min-width: 0;
+  height: 32px;
+  border-radius: var(--r-md);
 }
-#capture-screen-btn,
-#clear-screen-btn,
-#refresh-sources-btn,
-#reload-knowledge-btn {
-  padding: 4px var(--sp-4);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
+#privacy-screen-note,
+#screen-empty-hint {
+  margin: 0;
+  padding: var(--sp-5) var(--sp-6) 0;
 }
-#capture-screen-btn {
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-  color: var(--accent-text);
-  font-weight: 600;
-}
-#capture-screen-btn:hover:not(:disabled) {
-  background: var(--accent-soft-hover);
-  color: #fff;
-}
-#privacy-screen-note {
-  margin-top: var(--sp-3);
-  color: var(--warn);
-}
+#privacy-screen-note { color: var(--warn); }
+#privacy-screen-note:not(.hidden) + #screen-empty-hint { display: none; }
 
 /* Screenshot tray: up to 4 thumbnails + "n/4" status */
 #screen-preview-row {
@@ -1081,7 +1342,7 @@ section.collapsible:not(.collapsed) {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-4);
-  margin-top: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6) 0;
 }
 .shot-tray {
   display: flex;
@@ -1145,55 +1406,47 @@ section.collapsible:not(.collapsed) {
   overflow-wrap: anywhere;
 }
 .shot-keep {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  margin-top: var(--sp-4);
-  font-size: var(--fs-xs);
+  padding: var(--sp-6);
   color: var(--text-muted);
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-.shot-keep input {
-  margin: 0;
-  width: 14px;
-  height: 14px;
-  padding: 0;
-  accent-color: var(--accent);
-  cursor: pointer;
 }
 
 /* ---------------------------------------------------------------------
    6. Banner + toast
    --------------------------------------------------------------------- */
+/* One slim strip under the top bar (keys > offline > service, see setBanner) */
 #key-warning {
-  position: relative;
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  padding: 7px var(--sp-6);
+  margin: 0 var(--sp-4) var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
   font-size: var(--fs-sm);
   font-weight: 500;
   line-height: 1.4;
   color: var(--warn);
   background: var(--warn-soft);
-  border-bottom: 1px solid rgba(251, 191, 36, 0.2);
-  box-shadow: inset 3px 0 0 currentColor;
+  border-radius: var(--r-md);
   overflow-wrap: anywhere;
   flex-shrink: 0;
   cursor: default;
   animation: echo-slide-down var(--dur) var(--ease);
 }
+#key-warning::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
 #key-warning[data-kind="offline"] {
   color: var(--danger);
   background: var(--danger-soft);
-  border-bottom-color: rgba(248, 113, 113, 0.22);
 }
 #key-warning[data-kind="keys"] {
   cursor: pointer;
   color: var(--accent-text);
   background: var(--accent-soft);
-  border-bottom-color: var(--accent-border);
 }
 /* Clickable banners get an arrow affordance */
 #key-warning[data-kind="keys"]::after {
@@ -1211,7 +1464,7 @@ section.collapsible:not(.collapsed) {
 #toast {
   position: absolute;
   left: 50%;
-  bottom: var(--sp-6);
+  bottom: calc(var(--dock-h) + var(--sp-2));
   transform: translateX(-50%);
   z-index: 60;
   width: max-content;
@@ -1219,7 +1472,7 @@ section.collapsible:not(.collapsed) {
   padding: var(--sp-4) var(--sp-6);
   background: var(--bg-raised);
   border: 1px solid var(--border);
-  border-radius: var(--r-lg);
+  border-radius: var(--r-md);
   box-shadow: var(--shadow-pop);
   font-size: var(--fs-sm);
   line-height: 1.5;
@@ -1227,14 +1480,14 @@ section.collapsible:not(.collapsed) {
   font-variant-numeric: tabular-nums;
   white-space: pre-line;
   overflow-wrap: anywhere;
-  max-height: calc(100% - 24px);
+  max-height: calc(100% - var(--dock-h) - 16px);
   overflow-y: auto;
   cursor: pointer;
   animation: echo-toast-in var(--dur-slow) var(--ease);
 }
 
 /* ---------------------------------------------------------------------
-   7. Overlays
+   7. Full-window panels
    --------------------------------------------------------------------- */
 #summary-overlay,
 #settings-overlay,
@@ -1261,15 +1514,20 @@ section.collapsible:not(.collapsed) {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-4);
-  min-height: 42px;
-  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-7);
+  min-height: var(--bar-h);
+  padding: 0 var(--sp-3) 0 var(--sp-7);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+}
+.overlay-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
   font-size: var(--fs-md);
   font-weight: 650;
   color: var(--text-strong);
-  background: transparent;
 }
+.overlay-title .icon { color: var(--text-muted); }
 #summary-header-actions,
 #settings-header-actions,
 #diagnostics-header-actions {
@@ -1278,16 +1536,18 @@ section.collapsible:not(.collapsed) {
   align-items: center;
   gap: var(--sp-2);
 }
-#summary-header-actions button:not(#close-summary-btn) {
-  padding: 5px var(--sp-5);
+#summary-header-actions button:not(.icon-btn) {
+  height: var(--ctl-h);
+  padding: 0 var(--sp-5) 0 var(--sp-4);
   font-size: var(--fs-xs);
+  border-radius: var(--r-pill);
 }
 
 #summary-body,
 #diagnostics-body {
   flex: 1;
   overflow-y: auto;
-  padding: var(--sp-6) var(--sp-7) var(--sp-7);
+  padding: var(--sp-7);
   overflow-wrap: anywhere;
 }
 
@@ -1353,10 +1613,9 @@ section.collapsible:not(.collapsed) {
 /* Brand mark: an "echo" -- a dot with two fading rings */
 .brand-mark {
   position: relative;
-  width: 44px;
-  height: 44px;
-  margin: 0 auto var(--sp-6);
-  border-radius: 13px;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-lg);
   background: linear-gradient(145deg, #6f9bff 0%, #3d6de4 55%, #5a46d6 100%);
   box-shadow: 0 8px 24px rgba(61, 109, 228, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
@@ -1376,42 +1635,86 @@ section.collapsible:not(.collapsed) {
   box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.0), 0 0 0 6.5px rgba(255, 255, 255, 0.55);
 }
 .brand-mark::after {
-  width: 30px;
-  height: 30px;
+  width: 27px;
+  height: 27px;
   border: 1.5px solid rgba(255, 255, 255, 0.28);
 }
 
-/* ---- Settings: API keys, answers, privacy ---- */
+
+/* ---- Settings: a hero line, then groups (heading + one card each) ---- */
 #settings-body {
   flex: 1;
   overflow-y: auto;
-  padding: var(--sp-7) var(--sp-7) var(--sp-8);
+  padding: var(--sp-7) var(--sp-7) var(--sp-9);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-6);
+  gap: var(--sp-8);
   overflow-wrap: anywhere;
 }
-#settings-body .brand-mark { margin: var(--sp-2) auto 0; flex-shrink: 0; }
+.settings-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+}
+.settings-hero .brand-mark {
+  margin: 0;
+  flex-shrink: 0;
+}
 #settings-intro {
   margin: 0;
-  text-align: center;
   font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text-muted);
 }
-#settings-form {
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.settings-group > h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-subtle);
+}
+.settings-card {
   display: flex;
   flex-direction: column;
   gap: var(--sp-6);
+  padding: var(--sp-6);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  min-width: 0;
+}
+/* Rows inside a card are split by hairlines */
+.settings-card > .key-field + .key-field,
+.settings-card > .answer-setting-note + .answer-setting {
+  padding-top: var(--sp-6);
+  border-top: 1px solid var(--border-subtle);
+}
+.settings-card select,
+.settings-card input[type="password"] {
+  height: 32px;
+  border-radius: var(--r-md);
+}
+
+#settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
 }
 .key-field {
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  padding: var(--sp-5) var(--sp-6);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
 }
 .key-field-head {
   display: flex;
@@ -1421,7 +1724,7 @@ section.collapsible:not(.collapsed) {
 }
 .key-field-head label {
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
   color: var(--text-strong);
 }
 .key-state {
@@ -1476,12 +1779,12 @@ section.collapsible:not(.collapsed) {
   user-select: text;
 }
 .link-btn {
-  padding: 2px var(--sp-3);
+  padding: 2px var(--sp-4);
   font-size: var(--fs-xs);
   color: var(--accent-text);
   background: transparent;
   border-color: var(--accent-border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
 }
 .link-btn:hover {
   background: var(--accent-soft);
@@ -1489,6 +1792,7 @@ section.collapsible:not(.collapsed) {
   color: var(--text-strong);
 }
 #settings-message {
+  padding: 0 var(--sp-1);
   font-size: var(--fs-sm);
   line-height: 1.45;
   color: var(--text-muted);
@@ -1503,63 +1807,52 @@ section.collapsible:not(.collapsed) {
 }
 #settings-actions button {
   flex: 1 1 0;
-  min-height: 36px;
+  height: 34px;
   border-radius: var(--r-md);
 }
 #settings-storage-note {
   margin: 0;
+  padding: 0 var(--sp-1);
   font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--text-subtle);
 }
-/* Settings cards: Answers, Where your data goes, Hand gestures */
-#answer-settings,
-#settings-privacy,
-#gesture-settings {
-  padding: var(--sp-5) var(--sp-6);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-xl);
-  background: var(--surface-1);
+#remove-keys-btn {
+  align-self: flex-start;
+  height: var(--ctl-h);
+  padding: 0 var(--sp-5) 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--danger);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--r-md);
 }
-#answer-settings h4,
-#settings-privacy h4,
-#gesture-settings h4 {
-  margin: 0;
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-subtle);
+#remove-keys-btn:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: transparent;
 }
-#answer-settings h4 { margin-bottom: var(--sp-4); }
-#settings-privacy h4 { margin-bottom: var(--sp-3); }
+#remove-keys-btn:disabled { color: var(--text-subtle); }
+
 .answer-setting {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-4);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
+  font-weight: 500;
   color: var(--text);
 }
 .answer-setting select {
   flex: 0 1 auto;
   min-width: 0;
 }
-.answer-setting input[type="checkbox"] {
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--accent);
-}
 .answer-setting-note {
-  margin: var(--sp-4) 0 0;
+  margin: calc(-1 * var(--sp-3)) 0 0;
   font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--text-subtle);
 }
 .answer-setting-note:empty { display: none; }
-.answer-setting-note + .answer-setting { margin-top: var(--sp-6); }
 
 #settings-privacy ul {
   margin: 0;
@@ -1568,65 +1861,54 @@ section.collapsible:not(.collapsed) {
   line-height: 1.5;
   color: var(--text-muted);
 }
-#settings-privacy li { margin-bottom: var(--sp-2); }
+#settings-privacy li { margin-bottom: var(--sp-3); }
 #settings-privacy li:last-child { margin-bottom: 0; }
 #settings-privacy strong { color: var(--text); }
-#remove-keys-btn {
-  align-self: center;
-  padding: var(--sp-3) var(--sp-6);
-  font-size: var(--fs-sm);
-  color: var(--danger);
-  background: transparent;
-  border-color: transparent;
-}
-#remove-keys-btn:hover:not(:disabled) {
-  background: var(--danger-soft);
-  border-color: transparent;
-}
-#remove-keys-btn:disabled { color: var(--text-subtle); }
 
 /* ---------------------------------------------------------------------
    8. Modes
    --------------------------------------------------------------------- */
-/* While live: a faint green hairline under the header */
-#app.listening #header {
-  border-bottom-color: rgba(74, 222, 128, 0.22);
-}
-
-/* Focus mode: suggestion panel fills the overlay */
-#app.suggestion-expanded section.collapsible {
+/* Focus mode (menu / Ctrl+Shift+E): no dock, the card fills the window */
+#app.suggestion-expanded #dock,
+#app.suggestion-expanded #drawers {
   display: none;
 }
-#app.suggestion-expanded #suggestion-section { flex: 1 1 auto; }
-#app.suggestion-expanded #expand-suggestion-btn {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
+#app.suggestion-expanded #suggestion-section { margin-bottom: var(--sp-4); }
+#app.suggestion-expanded #toast { bottom: var(--sp-6); }
 
-/* Compact bar: header + latest answer only */
-#app.compact #controls,
-#app.compact section.collapsible,
-#app.compact #suggestion-section > .section-label,
+/* Compact bar: a thin strip of controls + the latest answer, nothing else */
+#app.compact #mode-select,
+#app.compact #menu-wrap,
+#app.compact #title,
+#app.compact #dock,
+#app.compact #drawers,
+#app.compact .card-head,
 #app.compact #suggestion-actions,
 #app.compact #suggestion-grounding,
-#app.compact #menu-wrap,
-#app.compact #minimize-btn,
-#app.compact #title {
+#app.compact #listen-btn .btn-label,
+#app.compact .empty-icon,
+#app.compact #suggestion-placeholder-hint {
   display: none !important;
 }
 #app.compact #header {
   min-height: 0;
   padding: 3px var(--sp-2) 3px var(--sp-5);
-  border-bottom: none;
 }
-#app.compact .icon-btn { width: 22px; height: 22px; font-size: 13px; }
-#app.compact #suggestion-section { min-height: 0; padding: 0 var(--sp-3) var(--sp-3); }
-#app.compact #suggestion-body {
-  padding: var(--sp-4) var(--sp-5);
-  border-radius: var(--r-lg);
+#app.compact .icon-btn,
+#app.compact #listen-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+}
+#app.compact .icon { width: 14px; height: 14px; }
+#app.compact .status-badge { height: 20px; }
+#app.compact #suggestion-section {
+  margin: 0 var(--sp-2) var(--sp-2);
+  border-radius: var(--r-md);
   box-shadow: none;
 }
-#app.compact #suggestion-text { font-size: var(--fs-md); line-height: 1.5; margin-bottom: 0; }
+#app.compact #suggestion-body { padding: var(--sp-3) var(--sp-5) var(--sp-4); }
+#app.compact #suggestion-text { font-size: var(--fs-md); line-height: 1.5; }
 #app.compact #suggestion-text p.headline { font-size: var(--fs-xl); margin-bottom: var(--sp-2); }
 #app.compact #suggestion-text .sentence + .sentence { margin-top: var(--sp-1); }
 #app.compact #suggestion-question {
@@ -1634,93 +1916,37 @@ section.collapsible:not(.collapsed) {
   -webkit-line-clamp: 1;
   font-size: var(--fs-xs);
 }
-#app.compact #suggestion-placeholder { padding: var(--sp-1) 0; font-size: var(--fs-sm); }
-#app.compact #key-warning { padding: var(--sp-2) var(--sp-5); font-size: var(--fs-xs); }
+#app.compact .empty-state { padding: 0; }
+#app.compact #suggestion-placeholder-title { max-width: none; font-size: var(--fs-sm); color: var(--text-muted); }
+#app.compact #key-warning { margin: 0 var(--sp-2) var(--sp-2); padding: var(--sp-1) var(--sp-4); font-size: var(--fs-xs); }
+#app.compact #toast { bottom: var(--sp-3); }
 
-/* While an answer is generating the green dot already says "live", so
-   the Live pill steps aside for the Thinking pill (keeps one header row). */
-#drag-handle:has(#thinking-indicator:not(.hidden)) #live-badge {
-  display: none;
-}
-
-/* Narrow windows (min width is 360px): keep the header on one line by
-   dropping the wordmark when status pills need the room. */
+/* Narrow windows (min width is 360px): keep the top bar on one line. */
 @media (max-width: 400px) {
-  #drag-handle:has(#thinking-indicator:not(.hidden)) #title,
-  #drag-handle:has(#privacy-badge:not(.hidden)) #title,
-  #drag-handle:has(#content-protection-badge:not(.hidden)) #title {
+  #mode-select { width: 96px; }
+  /* The wordmark steps aside for a status badge or a wider "Starting…" */
+  #drag-handle:has(.status-badge:not(.hidden)) #title,
+  #header:has(#listen-btn[aria-busy="true"]) #title {
     display: none;
   }
-  /* Make room for the chip next to Focus / Generate. */
-  #suggestion-section .section-label:has(#new-answer-chip:not(.hidden)) .section-title {
+  /* Three badges at once: Start/Stop drops to its icon */
+  #header:has(.status-badge:not(.hidden) ~ .status-badge:not(.hidden) ~ .status-badge:not(.hidden)) #listen-btn .btn-label {
     display: none;
   }
-  #suggestion-body { padding: var(--sp-5) var(--sp-6); }
-  #suggestion-actions {
-    bottom: calc(-1 * var(--sp-5));
-    margin: var(--sp-4) calc(-1 * var(--sp-6)) calc(-1 * var(--sp-5));
-    padding: var(--sp-3) var(--sp-6) var(--sp-4);
+  #header:has(.status-badge:not(.hidden) ~ .status-badge:not(.hidden) ~ .status-badge:not(.hidden)) #listen-btn {
+    padding: 0 var(--sp-4);
   }
-  #suggestion-actions button { padding: 5px var(--sp-4); }
-  .section-label button { padding: 4px var(--sp-3); }
-  .section-label { letter-spacing: 0.05em; }
-  /* The Gestures chip plus another status pill: drop the wordmark too. */
-  #drag-handle:has(#gesture-badge:not(.hidden)):has(#live-badge:not(.hidden), #thinking-indicator:not(.hidden), #privacy-badge:not(.hidden), #content-protection-badge:not(.hidden)) #title {
-    display: none;
-  }
+  /* Room for the "New answer ready" chip: Generate drops to its icon */
+  .card-head:has(#new-answer-chip:not(.hidden)) #generate-btn .btn-label { display: none; }
+  .card-head:has(#new-answer-chip:not(.hidden)) #generate-btn { width: var(--ctl-h); padding: 0; }
+  #suggestion-body { padding: var(--sp-4) var(--sp-7) var(--sp-6); }
 }
 
 /* ---------------------------------------------------------------------
-   9. Hand gestures (gestures.js): header chip, menu state, Settings
-      section, hold-progress pill, mirrored camera preview
+   9. Hand gestures (gestures.js): Settings group, hold-progress pill,
+      mirrored camera preview. (Top-bar badge + menu state: section 3.)
    --------------------------------------------------------------------- */
-#gesture-badge {
-  -webkit-app-region: no-drag;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-  padding: 4px 7px;
-  font-size: var(--fs-2xs);
-  font-weight: 700;
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--accent-text);
-  background: var(--accent-soft);
-  border: none;
-  border-radius: var(--r-pill);
-}
-#gesture-badge::before {
-  /* "camera is on" dot */
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--danger);
-}
-#gesture-badge:hover {
-  background: var(--accent-soft-hover);
-  border: none;
-}
-
-#menu #gestures-menu-btn.active {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
-/* ---- Settings card (shared card + heading styles are in section 7) ---- */
-#gesture-settings {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-4);
-  scroll-margin-top: var(--sp-4);
-}
-#gesture-settings h4 {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-}
+#gesture-settings { scroll-margin-top: var(--sp-4); }
 .gesture-tag {
   padding: 2px 6px;
   font-size: var(--fs-2xs);
@@ -1728,24 +1954,6 @@ section.collapsible:not(.collapsed) {
   color: var(--warn);
   background: var(--warn-soft);
   border-radius: var(--r-pill);
-}
-.gesture-switch {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-4);
-  font-size: var(--fs-sm);
-  line-height: 1.4;
-  color: var(--text);
-  cursor: pointer;
-}
-.gesture-switch input {
-  flex-shrink: 0;
-  width: 15px;
-  height: 15px;
-  margin: 1px 0 0;
-  padding: 0;
-  accent-color: var(--accent-fill);
-  cursor: pointer;
 }
 #gesture-status {
   font-size: var(--fs-xs);
@@ -1801,7 +2009,7 @@ section.collapsible:not(.collapsed) {
 #gesture-hold {
   position: absolute;
   right: var(--sp-5);
-  bottom: var(--sp-5);
+  bottom: calc(var(--dock-h) + var(--sp-2));
   z-index: 31;
   display: flex;
   flex-direction: column;
@@ -1818,7 +2026,7 @@ section.collapsible:not(.collapsed) {
   pointer-events: none;
   white-space: nowrap;
 }
-#app:has(#gesture-preview:not(.hidden)) #gesture-hold { bottom: calc(var(--sp-5) + 72px + var(--sp-3)); }
+#app:has(#gesture-preview:not(.hidden)) #gesture-hold { bottom: calc(var(--dock-h) + var(--sp-2) + 72px + var(--sp-3)); }
 #gesture-hold-track {
   display: block;
   height: 3px;
@@ -1840,7 +2048,7 @@ section.collapsible:not(.collapsed) {
   --gesture-progress: 0;
   position: absolute;
   right: var(--sp-5);
-  bottom: var(--sp-5);
+  bottom: calc(var(--dock-h) + var(--sp-2));
   z-index: 30;
   width: 96px;
   height: 72px;
@@ -1852,7 +2060,11 @@ section.collapsible:not(.collapsed) {
   box-shadow: var(--shadow-pop);
 }
 /* Let the end of Settings scroll clear of the preview in the corner. */
-#app:has(#gesture-preview:not(.hidden)) #settings-body { padding-bottom: calc(72px + var(--sp-8)); }
+#app:has(#gesture-preview:not(.hidden)) #settings-body { padding-bottom: calc(var(--dock-h) + 72px + var(--sp-8)); }
+/* Focus mode has no dock: the pill and preview sit in the corner. */
+#app.suggestion-expanded #gesture-preview,
+#app.suggestion-expanded #gesture-hold { bottom: var(--sp-5); }
+#app.suggestion-expanded:has(#gesture-preview:not(.hidden)) #gesture-hold { bottom: calc(var(--sp-5) + 72px + var(--sp-3)); }
 #gesture-video {
   display: block;
   width: 100%;
@@ -1889,14 +2101,13 @@ section.collapsible:not(.collapsed) {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  line-height: 1;
   color: #fff;
   background: rgba(0, 0, 0, 0.6);
   border: none;
   border-radius: 50%;
   pointer-events: auto;
 }
+#gesture-preview-close .icon { width: 10px; height: 10px; stroke-width: 2.6; }
 #gesture-preview-close:hover { background: rgba(0, 0, 0, 0.85); border: none; }
 
 /* The compact bar is too small for a preview; gestures keep working. */
@@ -1917,6 +2128,15 @@ section.collapsible:not(.collapsed) {
   0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55); }
   70% { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }
   100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+}
+@keyframes echo-live-pulse {
+  0% { box-shadow: var(--highlight-top), 0 0 0 0 rgba(211, 58, 54, 0.55); }
+  70% { box-shadow: var(--highlight-top), 0 0 0 6px rgba(211, 58, 54, 0); }
+  100% { box-shadow: var(--highlight-top), 0 0 0 0 rgba(211, 58, 54, 0); }
+}
+@keyframes echo-sheet-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
 }
 @keyframes echo-pop {
   from { opacity: 0; transform: scale(0.96) translateY(-2px); }
@@ -1945,7 +2165,10 @@ section.collapsible:not(.collapsed) {
     transition-duration: 0.01ms !important;
   }
   /* Keep state legible without movement */
-  .dot.live { box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.25); }
-  #thinking-indicator::after { opacity: 1; }
+  .think-dot,
+  .empty-state[data-state="thinking"] .empty-icon .icon,
+  .dock-capture.busy .icon { animation: none; opacity: 1; }
+  #listen-btn.recording { animation: none; box-shadow: var(--highlight-top), 0 0 0 3px rgba(211, 58, 54, 0.3); }
+  .empty-state[data-state="listening"] .empty-icon { animation: none; }
   #gesture-hold-bar { transition: none; }
 }

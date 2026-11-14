@@ -53,21 +53,38 @@ You can reopen Settings any time from the `⋯` menu > **API keys**.
 
 ## Using it
 
-- **Start Listening** records your mic and system audio and shows the transcript (`You:` / `Them:`). With Groq (default), speech is sent at natural pauses (about half a second after someone stops talking), and silence is never uploaded. With **Deepgram**, words appear live in a dimmed line that turns into a normal line when the sentence ends. The Mic / System audio dots glow while voice is detected.
-- When they finish a question, a first sentence to say appears in **Suggested response** in large text, usually within about a second (**Instant first line**, see Settings). The full answer follows and takes over that line, with the rest below it, so you can start talking while it arrives. Press **Generate** (`Ctrl+Enter`) to get one any time, even without listening.
-- An automatic answer never replaces the one you're reading: a **New answer ready** chip appears instead, as soon as the new answer has its first line. Click it when you're ready; if the answer is still being written, the rest streams in.
-- Every answer has **Shorten**, **Expand**, **Regenerate** and **Copy**.
-- **Modes** (dropdown next to Start Listening): Interview, Meeting, Presentation, General. Each has its own answer style.
-- **Script / Cues** (chip next to **Suggested response**): **Script** gives full spoken sentences, one per line. **Cues** gives a first line to say, then 3–4 bold keywords to talk around in your own words, which sounds more natural than reading.
+The window has three parts: a slim **top bar**, the **answer card** (most of the window), and an icon **dock** along the bottom.
+
+**Top bar**
+
+- **Start / Stop** records your mic and system audio. With Groq (default), speech is sent at natural pauses (about half a second after someone stops talking), and silence is never uploaded. With **Deepgram**, words appear live. The dot next to the name is green while listening, and Stop pulses red.
+- **Mode** (the dropdown): Interview, Meeting, Presentation, General. Each has its own answer style.
+- **`⋯` menu**: API keys & settings, keyboard shortcuts, Focus mode, hand gestures, Hide from screen share, Hide Echo.
+- **Compact bar** (the bar icon or `Ctrl+Shift+K`) shrinks Echo to just the latest answer; **×** hides Echo (`Ctrl+Shift+Space` brings it back).
+- Small icons appear next to the name only while something is on: thinking dots, **Privacy Mode**, **Hidden from screen share**, **Gestures**.
+
+**Answer card**
+
+- When they finish a question, a first sentence to say appears in large text, usually within about a second (**Instant first line**, see Settings). The full answer follows and takes over that line, with the rest below it, so you can start talking while it arrives. Press **Generate** (`Ctrl+Enter`) to get one any time, even without listening.
+- An automatic answer never replaces the one you're reading: a **New answer ready** chip appears in the card's header instead, as soon as the new answer has its first line. Click it when you're ready; if the answer is still being written, the rest streams in.
+- **Script / Cues** (toggle at the top left of the card): **Script** gives full spoken sentences, one per line. **Cues** gives a first line to say, then 3–4 bold keywords to talk around in your own words, which sounds more natural than reading.
+- The toolbar under an answer has **Shorten**, **Expand**, **Regenerate** (icons, hover for the name) and **Copy**.
 - Answers are written to sound like a person talking: contractions, plain words, no "Great question" or em dashes. Facts from your CV or notes are re-said in plain words, never copied.
-- **Screen context:** pick a screen or window and click **Capture**. Up to **4 screenshots** wait in a tray and go with your next answer or question. `Ctrl+Shift+S` captures and answers in one go.
-- **Knowledge base:** **Add Files** to add your CV or notes (`.txt` / `.md`). Only the snippets that match a question are sent.
+
+**Dock** (each icon opens a drawer over the lower part of the window; click it again, the drawer's ×, or press `Esc` to close)
+
+- **Live transcript:** the conversation as `You:` / `Them:`. The dock icon counts new lines while the drawer is closed, and the Mic / System audio dots in its header glow while voice is detected.
 - **Ask the assistant:** a chat box for follow-up questions about the conversation.
+- **Knowledge base:** **Add files** to add your CV or notes (`.txt` / `.md`). Only the snippets that match a question are sent. The dock icon shows how many files are loaded.
+- **Screen context:** pick which screen or window to capture and manage the screenshot tray. The dock icon shows how many screenshots are attached.
 - **Summarize** (`Ctrl+Shift+M`): summary, decisions, action items and open questions. Copy it or export it.
-- **Compact bar** (`▭` button or `Ctrl+Shift+K`): shrinks Echo to just the latest answer.
-- **Focus** (`Ctrl+Shift+E`): the answer panel fills the window.
+- **Camera** (right end of the dock): one tap adds a screenshot to the tray. Up to **4 screenshots** go with your next answer or question. `Ctrl+Shift+S` captures and answers in one go.
+
+**Modes of the window**
+
+- **Focus mode** (`⋯` menu or `Ctrl+Shift+E`): hides the dock so the answer card fills the window.
 - **Privacy Mode** (`Ctrl+Shift+P`): pauses screen capture and automatic answers. Manual Generate still works.
-- **Hide from screen share** (`⋯` menu or `Ctrl+Shift+H`): asks the OS to hide Echo from screen sharing and recording. Off by default, never remembered between launches, and a **Hidden** badge shows while it's on. Only use it when the people you're sharing with know. It doesn't work with every capture tool.
+- **Hide from screen share** (`⋯` menu or `Ctrl+Shift+H`): asks the OS to hide Echo from screen sharing and recording. Off by default, never remembered between launches, and a red eye icon shows in the top bar while it's on. Only use it when the people you're sharing with know. It doesn't work with every capture tool.
 
 ## Keyboard shortcuts
 
@@ -79,7 +96,7 @@ On macOS, `Ctrl` is `Cmd`. These work even when Echo isn't focused.
 | `Ctrl+Enter` | Generate an answer now |
 | `Ctrl+Shift+S` | Capture the screen and answer |
 | `Ctrl+Shift+M` | Summarize the session |
-| `Ctrl+Shift+E` | Focus the answer panel |
+| `Ctrl+Shift+E` | Focus mode (hide the dock) on/off |
 | `Ctrl+Shift+K` | Compact bar on/off |
 | `Ctrl+Shift+C` | Clear the transcript |
 | `Ctrl+Shift+X` | Click-through on/off (clicks go to the app underneath) |
@@ -87,9 +104,11 @@ On macOS, `Ctrl` is `Cmd`. These work even when Echo isn't focused.
 | `Ctrl+Shift+H` | Hide from screen share on/off |
 | `Ctrl+Shift+D` | Diagnostics panel |
 
+Inside Echo, `Esc` closes the open menu, panel or drawer.
+
 ## Hand gestures (experimental, off by default)
 
-Webcam shortcuts for when your hands are off the keyboard. Turn them on in `⋯` menu > **Hand gestures** > **Use webcam hand gestures as shortcuts**. A **Gestures** chip shows while the camera is on; click it to turn gestures off.
+Webcam shortcuts for when your hands are off the keyboard. Turn them on in `⋯` menu > **Hand gestures** > **Use webcam hand gestures as shortcuts**. A hand icon shows in the top bar while the camera is on; click it to turn gestures off.
 
 Hold a sign steady for about **0.8 s** (the fist needs **1.2 s**). After a gesture fires there's a 1.5 s cooldown, and the same sign won't fire again until your hand drops or changes.
 
@@ -113,7 +132,7 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
   - **Auto** (default): in Interview mode, `high` only for a **new problem to solve**: "write a function...", "given an array...", "design a URL shortener", a maths / probability / puzzle question, a long technical problem statement, or a problem on attached screenshots. **Follow-ups about your code** ("why did you use a hash map?", "what's the complexity?", "what if the input is empty?", "how would you test it?") use `low` and get a short spoken answer (a first line plus 1-3 lines, and at most a tiny snippet of the changed code) instead of the full walk-through. Behavioural questions and the other modes use `low` too.
   - **Fast**: always `low`, quickest answers.
   - **Max**: always `high`, best quality but slower.
-- **Answer style** (Settings > Answers, or the chip): **Script** (default) or **Cues**.
+- **Answer style** (Settings > Answers, or the Script / Cues toggle on the answer card): **Script** (default) or **Cues**.
 - **Instant first line** (Settings > Answers, on by default): with every answer, Echo also asks Gemini for just the first sentence to say (a tiny request with minimal thinking and a trimmed context), and shows it as soon as it arrives. When the full answer's own first sentence is ready, it replaces that line in place and the rest appears below; Copy, Shorten, Expand and the answer history always use the full answer. If the full answer is quicker, the first line is skipped. Turn it off to save free-tier quota: it's one extra small Gemini request per answer.
 
 ### How Echo keeps answers fast
@@ -151,7 +170,7 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 | "rejected your API key" | Copy the key again into Settings, or create a new one. Click **Test keys** to check. |
 | "Deepgram rejected your API key" (HTTP 401/403) | Create a new key at [console.deepgram.com](https://console.deepgram.com), paste it into Settings and click **Test keys**. Keys with restricted permissions may also be refused. |
 | "Deepgram account is out of credit" (HTTP 402) | Add credit in the Deepgram console, or set **Speech-to-text** back to Groq. Echo switches to Groq for the session if a Groq key is set. |
-| Live transcript not appearing (Deepgram) | Check the Mic / System audio dots glow when people talk (Echo only streams while it hears voice). Open `Ctrl+Shift+D`: "Audio chunks" should say `Deepgram live (worklet, open)`; `reconnecting` or a banner means the connection dropped. A changed Speech-to-text setting applies the next time you press Start Listening. Firewalls must allow `wss://api.deepgram.com`. |
+| Live transcript not appearing (Deepgram) | Check the Mic / System audio dots (Live transcript drawer) glow when people talk (Echo only streams while it hears voice). Open `Ctrl+Shift+D`: "Audio chunks" should say `Deepgram live (worklet, open)`; `reconnecting` or a banner means the connection dropped. A changed Speech-to-text setting applies the next time you press Start Listening. Firewalls must allow `wss://api.deepgram.com`. |
 | `git pull` refuses: "local changes would be overwritten" | Run `setup.cmd` (it offers to discard `package.json` / `package-lock.json` changes and stashes anything else), or run `git checkout -- package.json package-lock.json` yourself. |
 | `npm install` / `npm run dist` fails on Node 18 or 20 | Install Node.js 22 or newer (LTS) and run it again. `setup.cmd` can install it for you. |
 | "rate limit hit" (HTTP 429) | Free-tier limit. Wait a minute and try again. Long sessions can hit it. |

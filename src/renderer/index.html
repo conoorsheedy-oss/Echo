@@ -7,135 +7,197 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- Icon sprite: Echo's own line icons (24px grid, round caps). Used as
+       <svg class="icon"><use href="#i-name"/></svg>; drawn for this project. -->
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.1a2 2 0 0 0 1.5 1.5l5.1 1.9-5.1 1.9a2 2 0 0 0-1.5 1.5L12 20.5l-1.9-5.1a2 2 0 0 0-1.5-1.5L3.5 12l5.1-1.9a2 2 0 0 0 1.5-1.5z"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 5.5A1.5 1.5 0 0 0 13.5 4h-8A1.5 1.5 0 0 0 4 5.5v8A1.5 1.5 0 0 0 5.5 15"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-shorter" viewBox="0 0 24 24"><path d="M3.5 12h6.5M7.5 9.5L10 12l-2.5 2.5M20.5 12H14M16.5 9.5L14 12l2.5 2.5"/></symbol>
+      <symbol id="i-longer" viewBox="0 0 24 24"><path d="M10.5 12h-7M6 9.5L3.5 12 6 14.5M13.5 12h7M18 9.5l2.5 2.5-2.5 2.5"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.7M20 4v4.7h-4.7"/></symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.2l1.2-1.8h6.2L16.3 6h1.2A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.5" r="3.2"/></symbol>
+      <symbol id="i-screen" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="12" rx="2"/><path d="M9 20h6M12 16.5V20"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a7.5 7 0 0 1-7.5 7H9l-4.5 2.5 1.2-4A7 7 0 0 1 4 11.5a7.5 7 0 0 1 7.5-7h1a7.5 7 0 0 1 7.5 7z"/></symbol>
+      <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3.5h7l4.5 4.5v10.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2z"/><path d="M14 3.5V8h4.5M8.5 12.5h7M8.5 16h5"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M4.5 7h1M9 7h10.5M4.5 12h1M9 12h10.5M4.5 17h1M9 17h7"/></symbol>
+      <symbol id="i-summary" viewBox="0 0 24 24"><rect x="5" y="4.5" width="14" height="16" rx="2.5"/><path d="M9.5 4.5V3h5v1.5M8.5 10l1.2 1.2 2-2.2M8.5 15l1.2 1.2 2-2.2M14 10.5h1.5M14 15.5h1.5"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><path d="M10.4 5.1L10.7 2.7L13.3 2.7L13.6 5.1L15.8 6L17.7 4.5L19.5 6.3L18 8.2L18.9 10.4L21.3 10.7L21.3 13.3L18.9 13.6L18 15.8L19.5 17.7L17.7 19.5L15.8 18L13.6 18.9L13.3 21.3L10.7 21.3L10.4 18.9L8.2 18L6.3 19.5L4.5 17.7L6 15.8L5.1 13.6L2.7 13.3L2.7 10.7L5.1 10.4L6 8.2L4.5 6.3L6.3 4.5L8.2 6z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18.5" cy="12" r="1"/></symbol>
+      <symbol id="i-minimize" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+      <symbol id="i-compact" viewBox="0 0 24 24"><rect x="3.5" y="8.5" width="17" height="7" rx="2.5"/></symbol>
+      <symbol id="i-expand-window" viewBox="0 0 24 24"><rect x="4.5" y="3.5" width="15" height="17" rx="2.5"/><path d="M8.5 8h7M8.5 12h7"/></symbol>
+      <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3.5 3.5l17 17M10.3 6.2A9 9 0 0 1 12 6c4.8 0 8.2 3.8 9.5 6a14 14 0 0 1-2.7 3.3M6.4 7.7A14 14 0 0 0 2.5 12c1.3 2.2 4.7 6 9.5 6a9 9 0 0 0 4-.900M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5l7 2.5v5.5c0 4.3-2.9 7.6-7 9-4.1-1.4-7-4.7-7-9V6z"/><path d="M9.2 12.2l2 2 3.6-4"/></symbol>
+      <symbol id="i-hand" viewBox="0 0 24 24"><path d="M8 12.5v-6a1.5 1.5 0 0 1 3 0V11M11 10.5V4.8a1.5 1.5 0 0 1 3 0v5.7M14 10.8V6.3a1.5 1.5 0 0 1 3 0V14c0 4-2.5 6.5-6 6.5-2.8 0-4.3-1.3-5.6-3.6l-2-3.7a1.5 1.5 0 0 1 2.5-1.6L8 13.5"/></symbol>
+      <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10.2 10h.01M13.8 10h.01M17.5 10h.01M7.5 14h9"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15.5" r="4"/><path d="M11 12.5l8.5-8.5M16.5 7l2.5 2.5M13.5 10l2 2"/></symbol>
+      <symbol id="i-focus" viewBox="0 0 24 24"><path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h5.4a1.5 1.5 0 0 0 1.5-1.4L17 7"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5.5M6.5 11L12 5.5l5.5 5.5"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
+    </defs>
+  </svg>
+
   <div id="app">
+    <!-- Top bar: status, Start/Stop, mode, menu, window controls -->
     <header id="header">
       <div id="drag-handle">
         <span class="dot" id="status-dot"></span>
         <span id="title">Echo</span>
-        <span id="live-badge" class="hidden" title="Listening to mic + system audio">Live</span>
-        <span id="thinking-indicator" class="hidden" title="Generating an answer…">Thinking</span>
+        <span id="thinking-indicator" class="status-badge hidden" role="status" title="Generating an answer…"><span class="sr-only">Thinking</span><span class="think-dot"></span><span class="think-dot"></span><span class="think-dot"></span></span>
         <button id="new-answer-chip-compact" type="button" class="new-answer-chip hidden" title="A newer answer is ready -- click to show it (the current one stays until you do)">New answer</button>
-        <span id="privacy-badge" class="hidden" title="Screen capture disabled, automatic suggestions paused (Ctrl+Shift+P to turn off)">Privacy</span>
-        <span id="content-protection-badge" class="hidden" title="Hidden from screen sharing/recording (Ctrl+Shift+H to turn off)">Hidden</span>
-        <button id="gesture-badge" type="button" class="hidden" title="Hand gestures are on: the camera is in use. Click to turn them off.">Gestures</button>
+        <span id="privacy-badge" class="status-badge hidden" role="img" aria-label="Privacy Mode is on" title="Privacy Mode: screen capture disabled, automatic suggestions paused (Ctrl+Shift+P to turn off)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-shield"/></svg></span>
+        <span id="content-protection-badge" class="status-badge hidden" role="img" aria-label="Hidden from screen share" title="Hidden from screen sharing/recording (Ctrl+Shift+H to turn off)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-eye-off"/></svg></span>
+        <button id="gesture-badge" type="button" class="status-badge hidden" aria-label="Hand gestures are on. Click to turn them off." title="Hand gestures are on: the camera is in use. Click to turn them off."><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-hand"/></svg></button>
       </div>
       <div id="header-actions">
+        <button id="listen-btn" type="button" class="primary" aria-label="Start listening" title="Listen to mic + system audio and transcribe it"><svg class="icon i-start" aria-hidden="true" focusable="false"><use href="#i-mic"/></svg><svg class="icon i-stop" aria-hidden="true" focusable="false"><use href="#i-stop"/></svg><span class="btn-label">Start</span></button>
+        <select id="mode-select" aria-label="Mode" title="Mode: answer style for every suggestion">
+          <option value="interview">Interview</option>
+          <option value="meeting">Meeting</option>
+          <option value="presentation">Presentation</option>
+          <option value="general">General</option>
+        </select>
         <div id="menu-wrap">
-          <button id="menu-btn" class="icon-btn" title="Menu">&#8943;</button>
+          <button id="menu-btn" type="button" class="icon-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="menu" title="Menu: settings, shortcuts, focus mode, gestures"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-more"/></svg></button>
           <div id="menu" class="hidden">
-            <button id="api-keys-btn" title="Add, test or remove your API keys and pick the speech-to-text service">API keys</button>
-            <button id="shortcuts-btn" title="Show all keyboard shortcuts">Keyboard shortcuts</button>
-            <button id="gestures-menu-btn" title="Webcam hand-gesture shortcuts (experimental, off by default)">Hand gestures&hellip;</button>
-            <button id="hide-from-share-btn" title="Hide this overlay from screen sharing/recording -- off by default, only turn this on if whoever you're sharing with knows (Ctrl+Shift+H)">Hide from Screen Share: Off</button>
+            <button id="api-keys-btn" type="button" title="Settings: add, test or remove your API keys, pick the speech-to-text service, answer options"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-gear"/></svg><span class="menu-label">API keys &amp; settings</span></button>
+            <button id="shortcuts-btn" type="button" title="Show all keyboard shortcuts"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-keyboard"/></svg><span class="menu-label">Keyboard shortcuts</span></button>
+            <button id="expand-suggestion-btn" type="button" aria-pressed="false" title="Focus mode: hide the dock so the answer fills the overlay (Ctrl+Shift+E)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-focus"/></svg><span class="menu-label">Focus mode</span><kbd>Ctrl+Shift+E</kbd></button>
+            <button id="gestures-menu-btn" type="button" title="Webcam hand-gesture shortcuts (experimental, off by default)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-hand"/></svg><span class="menu-label">Hand gestures&hellip;</span></button>
+            <button id="hide-from-share-btn" type="button" title="Hide this overlay from screen sharing/recording -- off by default, only turn this on if whoever you're sharing with knows (Ctrl+Shift+H)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-eye-off"/></svg><span class="menu-label">Hide from Screen Share: Off</span></button>
+            <hr />
+            <button id="minimize-btn" type="button" title="Hide Echo (bring it back from the tray icon, or Ctrl+Shift+Space)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-minimize"/></svg><span class="menu-label">Hide Echo</span><kbd>Ctrl+Shift+Space</kbd></button>
           </div>
         </div>
-        <button id="compact-btn" class="icon-btn" title="Compact bar: show only the latest answer (Ctrl+Shift+K)">&#9645;</button>
-        <button id="minimize-btn" class="icon-btn" title="Hide (bring back from the tray icon, or Ctrl+Shift+Space)">&#8211;</button>
-        <button id="hide-btn" class="icon-btn" title="Hide (bring back from the tray icon, or Ctrl+Shift+Space)">&times;</button>
+        <button id="compact-btn" type="button" class="icon-btn" aria-label="Compact bar" title="Compact bar: show only the latest answer (Ctrl+Shift+K)"><svg class="icon i-to-compact" aria-hidden="true" focusable="false"><use href="#i-compact"/></svg><svg class="icon i-to-full" aria-hidden="true" focusable="false"><use href="#i-expand-window"/></svg></button>
+        <button id="hide-btn" type="button" class="icon-btn" aria-label="Hide Echo" title="Hide (bring back from the tray icon, or Ctrl+Shift+Space)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
       </div>
     </header>
 
     <div id="key-warning" class="warning hidden"></div>
 
-    <div id="controls">
-      <button id="listen-btn" class="primary" title="Listen to mic + system audio and transcribe it">Start Listening</button>
-      <select id="mode-select" title="Answer style for every suggestion">
-        <option value="interview">Interview</option>
-        <option value="meeting">Meeting</option>
-        <option value="presentation">Presentation</option>
-        <option value="general">General</option>
-      </select>
-      <div id="audio-indicators">
-        <span class="indicator" id="mic-indicator">Mic</span>
-        <span class="indicator" id="system-indicator">System audio</span>
-      </div>
-    </div>
-
-    <section id="knowledge-section" class="collapsible">
-      <div class="section-label">
-        <span class="section-title">Knowledge base</span>
-        <button id="add-knowledge-files-btn" title="Add .txt/.md files (CV, notes)">Add Files</button>
-        <button id="open-knowledge-folder-btn" title="Open your personal knowledge folder">Open Folder</button>
-        <button id="reload-knowledge-btn" title="Reload files from the knowledge folder">Reload</button>
-      </div>
-      <div id="knowledge-status" class="placeholder">Loading…</div>
-    </section>
-
-    <section id="screen-section" class="collapsible">
-      <div class="section-label">
-        <span class="section-title">Screen context</span>
-        <button id="refresh-sources-btn" title="Refresh list of screens/windows">Refresh</button>
-      </div>
-      <div id="screen-controls">
-        <select id="screen-source-select" title="Which screen or window to capture"></select>
-        <button id="capture-screen-btn" title="Capture now (Ctrl+Shift+S)">Capture</button>
-        <button id="clear-screen-btn" title="Remove all attached screenshots">Clear all</button>
-      </div>
-      <div id="privacy-screen-note" class="hidden placeholder">Screen capture is disabled while Privacy Mode is active.</div>
-      <!-- Screenshot tray: up to 4 captures, sent with the next answer/question. -->
-      <div id="screen-preview-row" class="hidden">
-        <ul id="screen-thumb" class="shot-tray" aria-label="Attached screenshots"></ul>
-        <span id="screen-status" class="placeholder" aria-live="polite"></span>
-      </div>
-      <label class="shot-keep" title="Off: the tray is emptied after a screenshot is sent. On: screenshots stay attached until you remove them.">
-        <input type="checkbox" id="keep-screenshots-toggle" />
-        Keep screenshots after sending
-      </label>
-    </section>
-
-    <section id="transcript-section" class="collapsible">
-      <div class="section-label">
-        <span class="section-title">Live transcript</span>
-        <button id="summarize-btn" title="Summarize this session (Ctrl+Shift+M)">Summarize</button>
-      </div>
-      <div id="transcript"></div>
-    </section>
-
-    <section id="suggestion-section">
-      <div class="section-label">
-        <span class="section-title">Suggested response</span>
-        <div class="section-label-actions">
-          <!-- Outside the answer box so it never covers or moves the text (CALM ANSWERS
-               in renderer.js). The compact bar uses the header copy. -->
+    <!-- The answer card: the one thing people look at mid-conversation. -->
+    <section id="suggestion-section" aria-label="Suggested answer">
+      <div class="card-head">
+        <button id="answer-style-chip" type="button" class="segmented" aria-pressed="false" aria-label="Answer style: Script. Click for Cues." title="Answer style: Script (full sentences to say). Click for Cues (a first line + keywords).">
+          <span class="seg seg-script">Script</span><span class="seg seg-cues">Cues</span>
+        </button>
+        <div class="card-head-actions">
+          <!-- Outside the answer text so it never covers or moves it (CALM ANSWERS
+               in renderer.js). The compact bar uses the top-bar copy. -->
           <button id="new-answer-chip" type="button" class="new-answer-chip hidden" title="A newer answer is ready -- click to show it (the current one stays until you do)">New answer ready</button>
-          <button id="answer-style-chip" type="button" aria-pressed="false" title="Answer style: Script (full sentences to say). Click for Cues (a first line + keywords).">Script</button>
-          <button id="expand-suggestion-btn" title="Fill the overlay with this panel (Ctrl+Shift+E)">Focus</button>
-          <button id="generate-btn" title="Generate now (Ctrl+Enter)">Generate</button>
+          <button id="generate-btn" type="button" aria-label="Generate an answer now" title="Generate an answer now (Ctrl+Enter)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-sparkle"/></svg><span class="btn-label">Generate</span></button>
         </div>
       </div>
       <div id="suggestion-body">
         <div id="suggestion-question" class="hidden" title="The question this answer is responding to"></div>
         <div id="suggestion-error" class="hidden" role="alert"></div>
-        <div id="suggestion-placeholder" class="placeholder">
-          Suggestions will appear here once a question is detected, or press Ctrl+Enter / Generate anytime.
+        <div id="suggestion-placeholder" class="empty-state" data-state="idle">
+          <span class="empty-icon" aria-hidden="true"><svg class="icon e-idle" aria-hidden="true" focusable="false"><use href="#i-sparkle"/></svg><svg class="icon e-listening" aria-hidden="true" focusable="false"><use href="#i-mic"/></svg><svg class="icon e-keys" aria-hidden="true" focusable="false"><use href="#i-key"/></svg></span>
+          <p id="suggestion-placeholder-title">Press Start, answers appear here</p>
+          <p id="suggestion-placeholder-hint">or Ctrl+Enter to generate one anytime</p>
         </div>
         <div id="suggestion-text" class="hidden"></div>
-        <div id="suggestion-actions" class="hidden">
-          <button data-action="shorten" title="Rewrite it shorter (1-2 sentences)">Shorten</button>
-          <button data-action="expand" title="Add more concrete detail">Expand</button>
-          <button data-action="regenerate" title="Generate a fresh answer (Ctrl+Enter)">Regenerate</button>
-          <button data-action="copy" title="Copy the answer">Copy</button>
-        </div>
         <div id="suggestion-grounding" class="hidden"></div>
+      </div>
+      <div id="suggestion-actions" class="hidden" role="toolbar" aria-label="Answer actions">
+        <button type="button" class="tool-btn" data-action="shorten" aria-label="Shorten" title="Shorten: rewrite it in 1-2 sentences"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-shorter"/></svg></button>
+        <button type="button" class="tool-btn" data-action="expand" aria-label="Expand" title="Expand: add more concrete detail"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-longer"/></svg></button>
+        <button type="button" class="tool-btn" data-action="regenerate" aria-label="Regenerate" title="Regenerate: a fresh answer (Ctrl+Enter)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg></button>
+        <button type="button" class="copy-btn" data-action="copy" title="Copy the answer"><svg class="icon i-copy" aria-hidden="true" focusable="false"><use href="#i-copy"/></svg><svg class="icon i-check" aria-hidden="true" focusable="false"><use href="#i-check"/></svg><span class="btn-label">Copy</span></button>
       </div>
     </section>
 
-    <section id="chat-section" class="collapsible">
-      <div class="section-label"><span class="section-title">Ask the assistant</span></div>
-      <div id="chat-log"></div>
-      <form id="chat-form">
-        <input id="chat-input" type="text" placeholder="e.g. what are they actually asking?" autocomplete="off" />
-        <button type="submit">Ask</button>
-      </form>
-    </section>
+    <!-- Drawers: one at a time, opened from the dock, slide up over the
+         lower part of the window (setupShell in renderer.js). -->
+    <div id="drawers">
+      <section id="transcript-section" class="drawer hidden" aria-labelledby="transcript-title">
+        <div class="drawer-head">
+          <h2 class="drawer-title" id="transcript-title"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-list"/></svg>Live transcript</h2>
+          <div id="audio-indicators">
+            <span class="indicator" id="mic-indicator">Mic</span>
+            <span class="indicator" id="system-indicator">System audio</span>
+          </div>
+          <button type="button" class="icon-btn drawer-close" aria-label="Close" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
+        </div>
+        <div id="transcript" data-empty="Nothing yet. Press Start and the conversation shows up here."></div>
+      </section>
+
+      <section id="chat-section" class="drawer hidden" aria-labelledby="chat-title">
+        <div class="drawer-head">
+          <h2 class="drawer-title" id="chat-title"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chat"/></svg>Ask the assistant</h2>
+          <button type="button" class="icon-btn drawer-close" aria-label="Close" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
+        </div>
+        <div id="chat-log" data-empty="Ask anything about the conversation so far."></div>
+        <form id="chat-form">
+          <input id="chat-input" type="text" aria-label="Question for the assistant" placeholder="e.g. what are they actually asking?" autocomplete="off" />
+          <button type="submit" class="send-btn" aria-label="Ask" title="Ask (Enter)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-send"/></svg></button>
+        </form>
+      </section>
+
+      <section id="knowledge-section" class="drawer drawer-auto hidden" aria-labelledby="knowledge-title">
+        <div class="drawer-head">
+          <h2 class="drawer-title" id="knowledge-title"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg>Knowledge base</h2>
+          <button id="reload-knowledge-btn" type="button" class="icon-btn" aria-label="Reload files" title="Reload files from the knowledge folder"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg></button>
+          <button type="button" class="icon-btn drawer-close" aria-label="Close" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
+        </div>
+        <div id="knowledge-status" class="placeholder">Loading…</div>
+        <div class="drawer-actions">
+          <button id="add-knowledge-files-btn" type="button" class="soft" title="Add .txt/.md files (CV, notes)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg><span class="btn-label">Add files</span></button>
+          <button id="open-knowledge-folder-btn" type="button" title="Open your personal knowledge folder"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-folder"/></svg><span class="btn-label">Open folder</span></button>
+        </div>
+      </section>
+
+      <section id="screen-section" class="drawer drawer-auto hidden" aria-labelledby="screen-title">
+        <div class="drawer-head">
+          <h2 class="drawer-title" id="screen-title"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-screen"/></svg>Screen context</h2>
+          <button id="clear-screen-btn" type="button" class="icon-btn" aria-label="Remove all screenshots" title="Remove all attached screenshots"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-trash"/></svg></button>
+          <button type="button" class="icon-btn drawer-close" aria-label="Close" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
+        </div>
+        <div id="screen-controls">
+          <select id="screen-source-select" aria-label="Screen or window to capture" title="Which screen or window to capture"></select>
+          <button id="refresh-sources-btn" type="button" class="icon-btn" aria-label="Refresh the list of screens and windows" title="Refresh list of screens/windows"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg></button>
+        </div>
+        <div id="privacy-screen-note" class="hidden placeholder">Screen capture is disabled while Privacy Mode is active.</div>
+        <p id="screen-empty-hint" class="placeholder">No screenshots attached. Tap the camera in the dock; up to 4 go with your next answer or question.</p>
+        <!-- Screenshot tray: up to 4 captures, sent with the next answer/question. -->
+        <div id="screen-preview-row" class="hidden">
+          <ul id="screen-thumb" class="shot-tray" aria-label="Attached screenshots"></ul>
+          <span id="screen-status" class="placeholder" aria-live="polite"></span>
+        </div>
+        <label class="switch-row shot-keep" title="Off: the tray is emptied after a screenshot is sent. On: screenshots stay attached until you remove them.">
+          <span>Keep screenshots after sending</span>
+          <input type="checkbox" class="switch" id="keep-screenshots-toggle" />
+        </label>
+      </section>
+    </div>
+
+    <!-- Dock: everything that isn't the answer lives behind these. -->
+    <nav id="dock" aria-label="Tools">
+      <button type="button" class="dock-btn" data-drawer="transcript-section" aria-expanded="false" aria-controls="transcript-section" aria-label="Live transcript" title="Live transcript"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-list"/></svg><span id="transcript-badge" class="dock-badge hidden" aria-hidden="true"></span></button>
+      <button type="button" class="dock-btn" data-drawer="chat-section" aria-expanded="false" aria-controls="chat-section" aria-label="Ask the assistant" title="Ask the assistant a question"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chat"/></svg></button>
+      <button type="button" class="dock-btn" data-drawer="knowledge-section" aria-expanded="false" aria-controls="knowledge-section" aria-label="Knowledge base" title="Knowledge base: your CV and notes"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg><span id="knowledge-badge" class="dock-badge quiet hidden" aria-hidden="true"></span></button>
+      <button type="button" class="dock-btn" data-drawer="screen-section" aria-expanded="false" aria-controls="screen-section" aria-label="Screen context" title="Screen context: attached screenshots and which screen to capture"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-screen"/></svg><span id="screen-badge" class="dock-badge hidden" aria-hidden="true"></span></button>
+      <button id="summarize-btn" type="button" class="dock-btn" aria-label="Summarize this session" title="Summarize this session (Ctrl+Shift+M)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-summary"/></svg></button>
+      <span class="dock-sep" aria-hidden="true"></span>
+      <button id="capture-screen-btn" type="button" class="dock-btn dock-capture" aria-label="Capture the screen" title="Capture the screen for your next answer (Ctrl+Shift+S captures and answers)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-camera"/></svg></button>
+    </nav>
 
     <div id="summary-overlay" class="hidden">
       <div id="summary-header">
-        <span>Session Summary</span>
+        <span class="overlay-title"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-summary"/></svg>Session summary</span>
         <div id="summary-header-actions">
-          <button id="copy-summary-btn" title="Copy the whole summary as text">Copy</button>
-          <button id="export-summary-btn" title="Save the summary to a file">Export</button>
-          <button id="close-summary-btn" title="Close">&times;</button>
+          <button id="copy-summary-btn" type="button" title="Copy the whole summary as text"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-copy"/></svg><span class="btn-label">Copy</span></button>
+          <button id="export-summary-btn" type="button" title="Save the summary to a file"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-download"/></svg><span class="btn-label">Export</span></button>
+          <button id="close-summary-btn" type="button" class="icon-btn" aria-label="Close" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
         </div>
       </div>
       <div id="summary-body">
@@ -158,9 +220,9 @@
 
     <div id="diagnostics-overlay" class="hidden">
       <div id="diagnostics-header">
-        <span>Diagnostics</span>
+        <span class="overlay-title">Diagnostics</span>
         <div id="diagnostics-header-actions">
-          <button id="close-diagnostics-btn" title="Close">&times;</button>
+          <button id="close-diagnostics-btn" type="button" class="icon-btn" aria-label="Close" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
         </div>
       </div>
       <div id="diagnostics-body">
@@ -173,19 +235,24 @@
 
     <div id="settings-overlay" class="hidden" role="dialog" aria-labelledby="settings-title">
       <div id="settings-header">
-        <span id="settings-title">Settings</span>
+        <span id="settings-title" class="overlay-title"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-gear"/></svg>Settings</span>
         <div id="settings-header-actions">
-          <button id="close-settings-btn" title="Close">&times;</button>
+          <button id="close-settings-btn" type="button" class="icon-btn" aria-label="Close settings" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
         </div>
       </div>
       <div id="settings-body">
-        <div class="brand-mark" aria-hidden="true"></div>
-        <p id="settings-intro" class="placeholder">
-          Echo is bring-your-own-keys: it talks straight to Groq (speech-to-text) and Google Gemini (answers)
-          with your own API keys. Both have free tiers. Deepgram (live speech-to-text) is optional.
-        </p>
+        <div class="settings-hero">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <p id="settings-intro">
+            Echo is bring-your-own-keys: it talks straight to Groq (speech-to-text) and Google Gemini (answers)
+            with your own API keys. Both have free tiers. Deepgram (live speech-to-text) is optional.
+          </p>
+        </div>
 
-        <form id="settings-form" autocomplete="off">
+        <section class="settings-group" aria-labelledby="keys-settings-title">
+          <h4 id="keys-settings-title">Speech-to-text &amp; API keys</h4>
+          <form id="settings-form" autocomplete="off">
+            <div class="settings-card">
           <div class="key-field" id="stt-provider-field">
             <div class="key-field-head">
               <label for="stt-provider-select">Speech-to-text</label>
@@ -234,6 +301,7 @@
             </div>
           </div>
 
+            </div>
           <div id="settings-message" role="status" aria-live="polite"></div>
 
           <div id="settings-actions">
@@ -242,10 +310,14 @@
           </div>
         </form>
 
-        <p id="settings-storage-note" class="placeholder"></p>
 
-        <div id="answer-settings">
-          <h4>Answers</h4>
+        <p id="settings-storage-note" class="placeholder"></p>
+          <button type="button" id="remove-keys-btn" title="Delete the keys saved by this app from this computer"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-trash"/></svg><span class="btn-label">Remove saved keys</span></button>
+        </section>
+
+        <section id="answer-settings" class="settings-group" aria-labelledby="answer-settings-title">
+          <h4 id="answer-settings-title">Answers</h4>
+          <div class="settings-card">
           <label class="answer-setting" for="quality-select">
             <span>Quality vs speed</span>
             <select id="quality-select" title="How hard Gemini thinks before answering">
@@ -262,39 +334,28 @@
               <option value="cues">Cues (keywords)</option>
             </select>
           </label>
-          <p class="answer-setting-note">Script gives you sentences to say, one per line. Cues gives you a first line to say, then 3-4 bold keywords to talk around in your own words. Also switchable with the Script/Cues chip next to "Suggested response".</p>
+          <p class="answer-setting-note">Script gives you sentences to say, one per line. Cues gives you a first line to say, then 3-4 bold keywords to talk around in your own words. Also switchable with the Script / Cues toggle on the answer card.</p>
           <label class="answer-setting" for="instant-headline-toggle">
             <span>Instant first line</span>
-            <input type="checkbox" id="instant-headline-toggle" checked title="Show a first sentence to say within about a second, while the full answer is written" />
+            <input type="checkbox" class="switch" id="instant-headline-toggle" checked title="Show a first sentence to say within about a second, while the full answer is written" />
           </label>
           <p class="answer-setting-note">Shows a first sentence to say within about a second, from a tiny extra Gemini request that runs alongside the full answer. When the full answer's own first sentence is ready, it takes over that line and the rest appears below. Turn off to save free-tier quota (one extra small request per answer).</p>
           <p id="model-note" class="answer-setting-note"></p>
         </div>
-
-        <div id="settings-privacy">
-          <h4>Where your data goes</h4>
-          <ul>
-            <li>Audio chunks go to <strong>Groq</strong> for transcription, under your key.</li>
-            <li>With Speech-to-text set to Deepgram, live audio (only while someone is talking) streams to <strong>Deepgram</strong> instead, under your key. Groq gets audio only if Echo has to fall back to it.</li>
-            <li>Transcript text, matched knowledge-base snippets and any screenshots you attach go to <strong>Google Gemini</strong>, under your key.</li>
-            <li>Nothing goes to any Echo server &mdash; there isn't one.</li>
-            <li>On Gemini's free tier, Google may use your prompts and responses to improve its products. Use a paid (billing-enabled) key to avoid that.</li>
-          </ul>
-        </div>
-
-        <button type="button" id="remove-keys-btn" title="Delete the keys saved by this app from this computer">Remove saved keys</button>
+        </section>
 
         <!-- Hand gestures (experimental, opt-in). Wired up by gestures.js;
              the gesture table body is rendered from gesture-core.js. -->
-        <div id="gesture-settings" aria-labelledby="gesture-settings-title">
+        <section id="gesture-settings" class="settings-group" aria-labelledby="gesture-settings-title">
           <h4 id="gesture-settings-title">Hand gestures <span class="gesture-tag">Experimental</span></h4>
-          <label class="gesture-switch" for="gesture-enable-toggle">
-            <input type="checkbox" id="gesture-enable-toggle" />
+          <div class="settings-card">
+          <label class="switch-row" for="gesture-enable-toggle">
             <span>Use webcam hand gestures as shortcuts</span>
+            <input type="checkbox" class="switch" id="gesture-enable-toggle" />
           </label>
-          <label class="gesture-switch" for="gesture-preview-toggle">
-            <input type="checkbox" id="gesture-preview-toggle" checked />
+          <label class="switch-row" for="gesture-preview-toggle">
             <span>Show camera preview</span>
+            <input type="checkbox" class="switch" id="gesture-preview-toggle" checked />
           </label>
           <div id="gesture-status" role="status" aria-live="polite"></div>
           <table id="gesture-map" class="gesture-map">
@@ -307,6 +368,20 @@
           </p>
           <p class="gesture-note">Gestures are ignored while Settings is open, while you're typing in Echo, and in Privacy Mode. One hand, good light, facing the camera works best.</p>
         </div>
+        </section>
+
+        <section id="settings-privacy" class="settings-group" aria-labelledby="settings-privacy-title">
+          <h4 id="settings-privacy-title">Where your data goes</h4>
+          <div class="settings-card">
+          <ul>
+            <li>Audio chunks go to <strong>Groq</strong> for transcription, under your key.</li>
+            <li>With Speech-to-text set to Deepgram, live audio (only while someone is talking) streams to <strong>Deepgram</strong> instead, under your key. Groq gets audio only if Echo has to fall back to it.</li>
+            <li>Transcript text, matched knowledge-base snippets and any screenshots you attach go to <strong>Google Gemini</strong>, under your key.</li>
+            <li>Nothing goes to any Echo server &mdash; there isn't one.</li>
+            <li>On Gemini's free tier, Google may use your prompts and responses to improve its products. Use a paid (billing-enabled) key to avoid that.</li>
+          </ul>
+        </div>
+        </section>
       </div>
     </div>
 
@@ -318,7 +393,7 @@
     <div id="gesture-preview" class="hidden">
       <video id="gesture-video" muted playsinline disablepictureinpicture></video>
       <span id="gesture-preview-label"></span>
-      <button id="gesture-preview-close" type="button" title="Hide the camera preview (gestures keep working)" aria-label="Hide camera preview">&times;</button>
+      <button id="gesture-preview-close" type="button" title="Hide the camera preview (gestures keep working)" aria-label="Hide camera preview"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
     </div>
 
     <div id="toast" class="hidden" role="status"></div>

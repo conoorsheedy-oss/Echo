@@ -127,7 +127,8 @@
   function syncUI() {
     el.enableToggle.checked = enabled;
     el.previewToggle.checked = previewWanted;
-    el.menuBtn.textContent = enabled ? 'Hand gestures: On (turn off)' : 'Hand gestures: Off…';
+    // The menu item is icon + label: only the label text changes.
+    (el.menuBtn.querySelector('.menu-label') || el.menuBtn).textContent = enabled ? 'Hand gestures: On (turn off)' : 'Hand gestures: Off…';
     el.menuBtn.classList.toggle('active', enabled);
     el.badge.classList.toggle('hidden', !enabled);
     el.preview.classList.toggle('hidden', !(enabled && previewWanted && running));

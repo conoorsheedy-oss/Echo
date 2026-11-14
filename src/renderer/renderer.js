@@ -72,6 +72,8 @@ const transcriptEl = document.getElementById('transcript');
 const modeSelect = document.getElementById('mode-select');
 const generateBtn = document.getElementById('generate-btn');
 const suggestionPlaceholder = document.getElementById('suggestion-placeholder');
+const suggestionPlaceholderTitle = document.getElementById('suggestion-placeholder-title');
+const suggestionPlaceholderHint = document.getElementById('suggestion-placeholder-hint');
 const suggestionText = document.getElementById('suggestion-text');
 const suggestionActions = document.getElementById('suggestion-actions');
 const suggestionGrounding = document.getElementById('suggestion-grounding');
@@ -89,6 +91,10 @@ const screenThumb = document.getElementById('screen-thumb');
 const screenStatus = document.getElementById('screen-status');
 const keepScreenshotsToggle = document.getElementById('keep-screenshots-toggle');
 const knowledgeStatusEl = document.getElementById('knowledge-status');
+const transcriptBadge = document.getElementById('transcript-badge');
+const knowledgeBadge = document.getElementById('knowledge-badge');
+const screenBadge = document.getElementById('screen-badge');
+const screenEmptyHint = document.getElementById('screen-empty-hint');
 const reloadKnowledgeBtn = document.getElementById('reload-knowledge-btn');
 const openKnowledgeFolderBtn = document.getElementById('open-knowledge-folder-btn');
 const addKnowledgeFilesBtn = document.getElementById('add-knowledge-files-btn');
@@ -135,7 +141,6 @@ const hideFromShareBtn = document.getElementById('hide-from-share-btn');
 const contentProtectionBadge = document.getElementById('content-protection-badge');
 
 // Header pills, compact bar, summary/diagnostics, answer settings
-const liveBadge = document.getElementById('live-badge');
 const thinkingIndicator = document.getElementById('thinking-indicator');
 const suggestionQuestion = document.getElementById('suggestion-question');
 const suggestionError = document.getElementById('suggestion-error');
@@ -151,6 +156,17 @@ const diagnosticsStateEl = document.getElementById('diagnostics-state');
 const diagnosticsEventsEl = document.getElementById('diagnostics-events');
 const qualitySelect = document.getElementById('quality-select');
 const modelNote = document.getElementById('model-note');
+
+// Buttons are icon + text label (or icon only): change the label without
+// wiping the icon. Dock badges: a small count, hidden at zero.
+function setBtnLabel(btn, text) {
+  const label = btn.querySelector('.btn-label, .menu-label');
+  (label || btn).textContent = text;
+}
+function setDockBadge(badgeEl, count) {
+  badgeEl.textContent = count > 99 ? '99+' : String(count || '');
+  badgeEl.classList.toggle('hidden', !count);
+}
 
 // ---- IPC wrapper ----
 // Electron only carries an error's message across ipcRenderer.invoke, so
@@ -364,7 +380,7 @@ function setSttProvider(value) {
   sttProvider = next;
   try { localStorage.setItem(STT_PROVIDER_KEY, sttProvider); } catch (err) { /* not remembered -- fine */ }
   applyKeyStatus();
-  if (changed && listening) showToast('Speech-to-text change applies the next time you press Start Listening.', 4000);
+  if (changed && listening) showToast('Speech-to-text change applies the next time you press Start.', 4000);
 }
 
 async function refreshKeyStatus() {
@@ -403,7 +419,7 @@ function closeSettings() {
 }
 
 function syncContentProtectionUI(enabled) {
-  hideFromShareBtn.textContent = enabled ? 'Hide from Screen Share: On' : 'Hide from Screen Share: Off';
+  setBtnLabel(hideFromShareBtn, enabled ? 'Hide from Screen Share: On' : 'Hide from Screen Share: Off');
   hideFromShareBtn.classList.toggle('active', enabled);
   contentProtectionBadge.classList.toggle('hidden', !enabled);
 }
@@ -473,6 +489,8 @@ function applyCompact(enabled) {
   compactBtn.title = compactMode
     ? 'Back to the full view (Ctrl+Shift+K)'
     : 'Compact bar: show only the latest answer (Ctrl+Shift+K)';
+  compactBtn.setAttribute('aria-label', compactMode ? 'Back to the full view' : 'Compact bar');
+  if (compactMode) closeDrawer();
   suggestionBodyEl.scrollTop = 0;
 }
 function exitCompact() {
@@ -503,6 +521,7 @@ function appendLine(speaker, text, meta = null) {
   // Finished lines go above any live (in-progress) lines, which stay last.
   transcriptEl.insertBefore(div, transcriptEl.querySelector('.line.interim'));
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  noteTranscriptLineForDock();
 
   const delay = autoSuggestDelay(text, meta);
   if (speaker === 'Them') {
@@ -642,6 +661,7 @@ function autoSuggest() {
 function clearTranscript() {
   transcriptLines.length = 0;
   transcriptEl.innerHTML = '';
+  resetTranscriptUnread();
   interimEls.clear();
   awaitingNextThemLine = false;
   clearTimeout(pendingQuestionTimer);
@@ -862,9 +882,11 @@ function safeRenderSuggestion(value, style) {
 // ---- Knowledge base (personal files searched for grounding context) ----
 function renderKnowledgeStatus(status) {
   if (!status || !status.fileCount) {
-    knowledgeStatusEl.textContent = 'No files yet — click "Add Files" to pick your CV/notes (.txt or .md).';
+    knowledgeStatusEl.textContent = 'No files yet. Add your CV or notes (.txt or .md) and answers will draw on them.';
+    setDockBadge(knowledgeBadge, 0);
     return;
   }
+  setDockBadge(knowledgeBadge, status.fileCount);
   knowledgeStatusEl.textContent = `${status.fileCount} file${status.fileCount === 1 ? '' : 's'} loaded (${status.chunkCount} chunks): ${status.files.join(', ')}`;
 }
 
@@ -933,8 +955,7 @@ async function captureScreen({ andAnswer = false } = {}) {
     return;
   }
   const sourceId = screenSourceSelect.value || undefined;
-  const previousLabel = captureScreenBtn.textContent;
-  captureScreenBtn.textContent = '…';
+  captureScreenBtn.classList.add('busy');
   captureScreenBtn.disabled = true;
   try {
     const result = await api.captureScreen(sourceId);
@@ -955,7 +976,7 @@ async function captureScreen({ andAnswer = false } = {}) {
   } catch (err) {
     showToast('Screen capture failed: ' + err.message);
   } finally {
-    captureScreenBtn.textContent = previousLabel;
+    captureScreenBtn.classList.remove('busy');
     captureScreenBtn.disabled = privacyModeEnabled;
   }
 }
@@ -984,6 +1005,8 @@ function renderScreenshotTray() {
     ? `${screenshots.length}/${MAX_SCREENSHOTS} · latest: ${last.name || 'screen'} · ${new Date(last.capturedAt).toLocaleTimeString()}`
     : '';
   screenPreviewRow.classList.toggle('hidden', screenshots.length === 0);
+  screenEmptyHint.classList.toggle('hidden', screenshots.length > 0);
+  setDockBadge(screenBadge, screenshots.length);
   clearScreenBtn.disabled = screenshots.length === 0;
 }
 
@@ -1146,7 +1169,7 @@ function startRollingRecorder(stream, speaker, indicatorEl) {
   function dead() {
     stopTimers();
     indicatorEl.classList.remove('active', 'speaking');
-    if (speaker === 'You') showToast('Microphone stopped delivering audio -- check it, then Stop / Start Listening.');
+    if (speaker === 'You') showToast('Microphone stopped delivering audio -- check it, then Stop / Start.');
   }
 
   // Ends the current recording (uploading it or not) and starts the next
@@ -1186,7 +1209,7 @@ function startRollingRecorder(stream, speaker, indicatorEl) {
   current = begin();
   if (!current) {
     indicatorEl.classList.remove('active');
-    if (speaker === 'You') showToast('Microphone stopped delivering audio -- check it, then Stop / Start Listening.');
+    if (speaker === 'You') showToast('Microphone stopped delivering audio -- check it, then Stop / Start.');
     return { stop() {}, mode: () => 'off' };
   }
   indicatorEl.classList.add('active');
@@ -1522,19 +1545,25 @@ function releaseStreams() {
 
 function updateSuggestionPlaceholder() {
   if (lastSuggestion) return; // an answer is showing -- placeholder is hidden anyway
-  suggestionPlaceholder.textContent = suggestInFlight
-    ? 'Thinking…'
-    : listening
-      ? 'Listening… an answer appears here as soon as they ask a question. Ctrl+Enter to generate one now.'
-      : keysReady()
-        ? 'Not listening. Press Start Listening — answers appear here when a question is detected, or press Generate anytime.'
-        : `${SttCore.missingKeysHint(sttReadiness())} (⋯ menu > API keys) to get started.`;
+  // One short line + a quiet hint; the icon follows data-state (styles.css).
+  const state = suggestInFlight ? 'thinking' : listening ? 'listening' : keysReady() ? 'idle' : 'keys';
+  const copy = {
+    thinking: ['Thinking…', ''],
+    listening: ['Listening… answers appear when they ask a question', 'Ctrl+Enter to answer now'],
+    idle: ['Press Start, answers appear here', 'or Ctrl+Enter to generate one anytime'],
+    keys: [`${SttCore.missingKeysHint(sttReadiness())} to get started`, '⋯ menu > API keys'],
+  }[state];
+  suggestionPlaceholder.dataset.state = state;
+  suggestionPlaceholderTitle.textContent = copy[0];
+  suggestionPlaceholderHint.textContent = copy[1];
 }
 
 function syncListeningUI() {
   // Start needs Gemini + the speech-to-text provider's key; Stop must always work.
   listenBtn.disabled = listenBusy || (!listening && !keysReady());
-  if (!listenBusy) listenBtn.textContent = listening ? 'Stop Listening' : 'Start Listening';
+  if (!listenBusy) setBtnLabel(listenBtn, listening ? 'Stop' : 'Start');
+  listenBtn.setAttribute('aria-label', listening ? 'Stop listening' : 'Start listening');
+  listenBtn.setAttribute('aria-busy', listenBusy ? 'true' : 'false');
   listenBtn.classList.toggle('recording', listening);
   listenBtn.title = listening
     ? 'Stop listening'
@@ -1543,7 +1572,6 @@ function syncListeningUI() {
       : `${SttCore.missingKeysHint(sttReadiness())} first (⋯ menu > API keys)`;
   statusDot.classList.toggle('live', listening);
   statusDot.title = listening ? 'Listening' : 'Not listening';
-  liveBadge.classList.toggle('hidden', !listening);
   appEl.classList.toggle('listening', listening);
   updateSuggestionPlaceholder();
 }
@@ -1555,7 +1583,7 @@ async function startListening() {
     return;
   }
   listenBusy = true;
-  listenBtn.textContent = 'Starting…';
+  setBtnLabel(listenBtn, 'Starting…');
   syncListeningUI();
   try {
     await startListeningInner();
@@ -1743,9 +1771,7 @@ async function runKeyTest() {
   }
 }
 testKeysBtn.addEventListener('click', () => runKeyTest());
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !settingsOverlay.classList.contains('hidden')) closeSettings();
-});
+// Esc closes Settings: see the one Escape handler in setupShell (bottom of this file).
 
 removeKeysBtn.addEventListener('click', async () => {
   if (!window.confirm('Remove the API keys saved by Echo on this computer?')) return;
@@ -1816,7 +1842,7 @@ api.onContentProtectionChanged((enabled) => {
 //   full answer is always the source of truth.
 //   If the full answer's first words arrive before any headline, the
 //   headline is dropped (main aborts it; anything late is ignored here).
-// Two copies of the chip: label row (full view) and header (compact bar).
+// Two copies of the chip: answer card header (full view) and top bar (compact bar).
 const newAnswerChips = [document.getElementById('new-answer-chip'), document.getElementById('new-answer-chip-compact')];
 
 let shownAnswer = null; // last finished answer put on screen: { text, question, groundingFiles }
@@ -2044,7 +2070,7 @@ qualitySelect.addEventListener('change', () => {
   try { localStorage.setItem(QUALITY_KEY, currentQuality()); } catch (err) { /* not remembered -- fine */ }
 });
 
-// ---- Answer style (Settings + the chip by "Suggested response") ----
+// ---- Answer style (Settings + the Script / Cues toggle on the answer card) ----
 // 'script': full spoken sentences, one per line. 'cues': a big first line to
 // say, then a few bold keywords to talk around in your own words.
 const ANSWER_STYLE_KEY = 'echo.answerStyle';
@@ -2061,7 +2087,8 @@ function setAnswerStyle(style, { save = true } = {}) {
   answerStyle = ANSWER_STYLE_VALUES.includes(style) ? style : 'script';
   answerStyleSelect.value = answerStyle;
   const cues = answerStyle === 'cues';
-  answerStyleChip.textContent = cues ? 'Cues' : 'Script';
+  // Two-segment toggle: both labels stay in the markup, .active = Cues.
+  answerStyleChip.setAttribute('aria-label', cues ? 'Answer style: Cues. Click for Script.' : 'Answer style: Script. Click for Cues.');
   answerStyleChip.classList.toggle('active', cues);
   answerStyleChip.setAttribute('aria-pressed', cues ? 'true' : 'false');
   answerStyleChip.title = cues
@@ -2308,15 +2335,17 @@ async function requestSuggestion(instruction, opts = {}) {
 generateBtn.addEventListener('click', () => requestSuggestion(undefined, { question: null }));
 
 suggestionActions.addEventListener('click', (e) => {
-  const action = e.target.dataset.action;
+  const actionBtn = e.target.closest('[data-action]');
+  const action = actionBtn && actionBtn.dataset.action;
   if (!action) return;
   // main.js rejects instructions over 4000 chars: quote at most 3000.
   const quoted = lastSuggestion.length > 3000 ? `${lastSuggestion.slice(0, 3000)}…` : lastSuggestion;
   if (action === 'copy') {
-    const btn = e.target;
+    const btn = actionBtn;
     const copied = () => {
-      btn.textContent = 'Copied';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+      setBtnLabel(btn, 'Copied');
+      btn.classList.add('copied');
+      setTimeout(() => { setBtnLabel(btn, 'Copy'); btn.classList.remove('copied'); }, 1200);
     };
     navigator.clipboard.writeText(lastSuggestion).then(copied).catch(() => {
       // navigator.clipboard refuses when the overlay isn't focused (e.g. a
@@ -2589,51 +2618,112 @@ const SHORTCUTS_TEXT = [
 ].join('\n');
 shortcutsBtn.addEventListener('click', () => showToast(SHORTCUTS_TEXT, 12000));
 
-// ---- "Focus" mode: suggestion panel fills the whole overlay ----
+// ---- "Focus" mode (⋯ menu / Ctrl+Shift+E): the dock goes, the answer card fills the overlay ----
 let suggestionExpanded = false;
 
 function setSuggestionExpanded(expanded) {
   suggestionExpanded = expanded;
   appEl.classList.toggle('suggestion-expanded', expanded);
-  expandSuggestionBtn.textContent = expanded ? 'Restore' : 'Focus';
+  setBtnLabel(expandSuggestionBtn, expanded ? 'Exit focus mode' : 'Focus mode');
+  expandSuggestionBtn.setAttribute('aria-pressed', expanded ? 'true' : 'false');
+  if (expanded) closeDrawer();
 }
 
 expandSuggestionBtn.addEventListener('click', () => setSuggestionExpanded(!suggestionExpanded));
 
-// ---- ⋯ menu + collapsible sections ----
-(function setupMenuAndSections() {
+// ---- ⋯ menu, dock + drawers ----
+// The default view is top bar + answer card + dock. Everything else
+// (transcript, chat, knowledge base, screen context) is a drawer opened
+// from the dock: one at a time, sliding up over the lower part of the
+// window; the same dock button, its close button or Esc dismisses it.
+const dockButtons = Array.from(document.querySelectorAll('#dock [data-drawer]'));
+const drawerEls = Array.from(document.querySelectorAll('#drawers .drawer'));
+let openDrawerId = null;
+let transcriptUnread = 0;
+
+function setOpenDrawer(id) {
+  openDrawerId = id && drawerEls.some((d) => d.id === id) ? id : null;
+  drawerEls.forEach((d) => d.classList.toggle('hidden', d.id !== openDrawerId));
+  dockButtons.forEach((b) => {
+    const on = b.dataset.drawer === openDrawerId;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-expanded', on ? 'true' : 'false');
+  });
+  if (openDrawerId) appEl.dataset.drawer = openDrawerId;
+  else delete appEl.dataset.drawer;
+  if (openDrawerId === 'transcript-section') {
+    resetTranscriptUnread();
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  } else if (openDrawerId === 'chat-section') {
+    chatLog.scrollTop = chatLog.scrollHeight;
+    chatInput.focus();
+  }
+}
+
+function closeDrawer() {
+  if (!openDrawerId) return;
+  const btn = dockButtons.find((b) => b.dataset.drawer === openDrawerId);
+  const hadFocus = document.activeElement && document.activeElement.closest('#drawers');
+  setOpenDrawer(null);
+  if (hadFocus && btn) btn.focus();
+}
+
+// Unread count on the transcript dock button: finished lines that arrived
+// while its drawer was closed.
+function noteTranscriptLineForDock() {
+  if (openDrawerId === 'transcript-section') return;
+  transcriptUnread += 1;
+  setDockBadge(transcriptBadge, transcriptUnread);
+}
+function resetTranscriptUnread() {
+  transcriptUnread = 0;
+  setDockBadge(transcriptBadge, 0);
+}
+
+(function setupShell() {
   const menuBtn = document.getElementById('menu-btn');
   const menu = document.getElementById('menu');
+  const setMenuOpen = (open) => {
+    menu.classList.toggle('hidden', !open);
+    menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
   menuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    menu.classList.toggle('hidden');
+    setMenuOpen(menu.classList.contains('hidden'));
   });
-  menu.addEventListener('click', () => menu.classList.add('hidden'));
+  menu.addEventListener('click', () => setMenuOpen(false));
   document.addEventListener('click', (e) => {
-    if (!menu.contains(e.target) && e.target !== menuBtn) menu.classList.add('hidden');
+    if (!menu.contains(e.target) && !menuBtn.contains(e.target)) setMenuOpen(false);
   });
+
+  dockButtons.forEach((btn) => {
+    btn.addEventListener('click', () => setOpenDrawer(openDrawerId === btn.dataset.drawer ? null : btn.dataset.drawer));
+  });
+  document.querySelectorAll('#drawers .drawer-close').forEach((btn) => {
+    btn.addEventListener('click', () => closeDrawer());
+  });
+
+  // Esc closes the topmost thing: menu, then a full-window panel, then a drawer.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') menu.classList.add('hidden');
-  });
-
-  // Extra sections start collapsed; the open/closed choice is remembered.
-  document.querySelectorAll('section.collapsible').forEach((sec) => {
-    const key = `ui:collapsed:${sec.id}`;
-    let collapsed = true;
-    try {
-      const saved = localStorage.getItem(key);
-      if (saved !== null) collapsed = saved === '1';
-    } catch (err) { /* storage unavailable -- default is fine */ }
-    sec.classList.toggle('collapsed', collapsed);
-
-    const label = sec.querySelector('.section-label');
-    if (!label) return;
-    label.addEventListener('click', (e) => {
-      if (e.target.closest('button')) return; // action buttons keep working
-      const nowCollapsed = !sec.classList.contains('collapsed');
-      sec.classList.toggle('collapsed', nowCollapsed);
-      try { localStorage.setItem(key, nowCollapsed ? '1' : '0'); } catch (err) { /* ignore */ }
-    });
+    if (e.key !== 'Escape') return;
+    if (!menu.classList.contains('hidden')) {
+      setMenuOpen(false);
+      menuBtn.focus();
+      return;
+    }
+    if (!settingsOverlay.classList.contains('hidden')) {
+      closeSettings();
+      return;
+    }
+    if (!diagnosticsOverlay.classList.contains('hidden')) {
+      diagnosticsOverlay.classList.add('hidden');
+      return;
+    }
+    if (!summaryOverlay.classList.contains('hidden')) {
+      summaryOverlay.classList.add('hidden');
+      return;
+    }
+    closeDrawer();
   });
 })();
 
