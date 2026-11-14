@@ -40,6 +40,7 @@ Echo is a plain Electron app: no framework, no bundler. Three pieces:
 - **IDs are the contract.** `renderer.js` and `gestures.js` look elements up by ID, and gestures fire actions by clicking the real buttons (`#generate-btn`, `#listen-btn`, `#capture-screen-btn`, `#clear-screen-btn`, the Copy button in `#suggestion-actions`). Move elements freely, but keep the IDs.
 - **Icons** are an inline SVG sprite at the top of `index.html` (`<symbol id="i-…">`, 24px grid, stroke only), used as `<svg class="icon"><use href="#i-name"/></svg>`. They were drawn for Echo; there is no icon font or remote asset (the CSP allows none). Buttons with an icon keep their text in a `.btn-label` / `.menu-label` span, and code changes it with `setBtnLabel()` so the icon survives.
 - **Styles** are token-based (`:root` in `styles.css`): one spacing scale, one radius scale, one icon size. Compact bar (`#app.compact`) and Focus mode (`#app.suggestion-expanded`) are classes on `#app` that hide rows.
+- **See-through** (Settings > Appearance > Transparency, `Ctrl+Shift+T`): the window is created `transparent: true` with a fully transparent page background, and the UI paints its own surfaces. `renderer.js` (SEE-THROUGH) stores one level, 0-85 %, in `localStorage` (`echo.transparency`; `echo.transparencyLast` is the level `Ctrl+Shift+T` restores), and writes it to the `--see-through` CSS variable on `<html>`, plus `data-see-through` while it's above 0. Every surface alpha in `:root` derives from that variable (`--bg-app` frame, `--bg-card` extra fill under the answer, `--bg-drawer` / `--bg-menu` / `--bg-overlay` capped at 12 / 10 / 20 %, `--code-bg`), and section 10 of `styles.css` adds the legibility protection that scales with it: a text halo (`--text-halo`, inherited from `#app`, set explicitly on form controls), an icon `drop-shadow`, lifted `--text-muted` / `--text-subtle`, a heavier answer weight, and a dark backing behind the frame's ghost controls and tinted chips. `BrowserWindow.setOpacity` is never used (it would fade text too). `prefers-reduced-transparency: reduce` forces `--see-through: 0`. Click-through (`#app.click-through`) only changes `#app`'s opacity (`0.55 + 0.4 × see-through`), so the two stack.
 
 ## IPC channels
 
@@ -55,7 +56,7 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 | Window | `window:set-compact`, `window:hide` (send), `window:minimize` (send) | `window:compact-changed`, `window:visibility-changed` |
 | Privacy | `privacy:status`, `content-protection:status`, `content-protection:toggle` | `hotkey:privacy-mode-changed`, `hotkey:content-protection-changed` |
 | Gestures | `gestures:set-enabled`, `gestures:status`, `gestures:load-model` | |
-| Misc | `config:status`, `clipboard:write-text` | `hotkey:generate`, `hotkey:clear`, `hotkey:click-through-changed`, `hotkey:capture-screen`, `hotkey:summarize`, `hotkey:toggle-expand`, `hotkey:diagnostics` |
+| Misc | `config:status`, `clipboard:write-text` | `hotkey:generate`, `hotkey:clear`, `hotkey:click-through-changed`, `hotkey:capture-screen`, `hotkey:summarize`, `hotkey:toggle-expand`, `hotkey:diagnostics`, `hotkey:toggle-transparency` |
 
 ## Speech-to-text flow
 

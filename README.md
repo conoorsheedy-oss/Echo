@@ -86,6 +86,8 @@ The window has three parts: a slim **top bar**, the **answer card** (most of the
 - **Focus mode** (`⋯` menu or `Ctrl+Shift+E`): hides the dock so the answer card fills the window.
 - **Privacy Mode** (`Ctrl+Shift+P`): pauses screen capture and automatic answers. Manual Generate still works.
 - **Hide from screen share** (`⋯` menu or `Ctrl+Shift+H`): asks the OS to hide Echo from screen sharing and recording. Off by default, never remembered between launches, and a red eye icon shows in the top bar while it's on. Only use it when the people you're sharing with know. It doesn't work with every capture tool.
+- **See-through** (Settings > Appearance > **Transparency**, or `Ctrl+Shift+T`): lets you see the call or your code editor behind Echo while you read. Only the background fades; the text stays solid. See [Settings](#settings).
+- **Click-through** (`Ctrl+Shift+X`): clicks go to the app underneath, and Echo dims so you can tell. With see-through on it dims less, because the background is already thin.
 
 ## Keyboard shortcuts
 
@@ -101,11 +103,14 @@ On macOS, `Ctrl` is `Cmd`. These work even when Echo isn't focused.
 | `Ctrl+Shift+K` | Compact bar on/off |
 | `Ctrl+Shift+C` | Clear the transcript |
 | `Ctrl+Shift+X` | Click-through on/off (clicks go to the app underneath) |
+| `Ctrl+Shift+T` | See-through background on/off (Solid ↔ your Transparency level) |
 | `Ctrl+Shift+P` | Privacy Mode on/off |
 | `Ctrl+Shift+H` | Hide from screen share on/off |
 | `Ctrl+Shift+D` | Diagnostics panel |
 
 Inside Echo, `Esc` closes the open menu, panel or drawer.
+
+`Ctrl+Shift+T` is a global shortcut too, so while Echo runs it isn't available to other apps (in browsers it normally reopens a closed tab).
 
 ## Hand gestures (experimental, off by default)
 
@@ -135,6 +140,13 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
   - **Max**: always `high`, best quality but slower.
 - **Answer style** (Settings > Answers, or the Script / Cues toggle on the answer card): **Script** (default) or **Cues**.
 - **Instant first line** (Settings > Answers, on by default): with every answer, Echo also asks Gemini for just the first sentence to say (a tiny request with minimal thinking and a trimmed context), and shows it as soon as it arrives. When the full answer's own first sentence is ready, it replaces that line in place and the rest appears below; Copy, Shorten, Expand and the answer history always use the full answer. If the full answer is quicker, the first line is skipped. Turn it off to save free-tier quota: it's one extra small Gemini request per answer.
+
+- **Transparency** (Settings > Appearance): how see-through Echo's background is, from **0%** (solid, the original look) to **85%**, with **Solid** (0%), **Light** (30%, the default) and **Glass** (60%) presets. It applies live as you drag (Settings previews the level while you hold the slider) and is remembered on this computer. `Ctrl+Shift+T` switches between Solid and your level.
+  - Only backgrounds fade. Text and icons stay fully opaque (Echo never fades the whole window). As the background thins, text gets a soft dark outline, the answer text gets slightly bolder, grey labels get lighter, and buttons on the window frame get a small dark backing, so it stays readable over white pages and busy video.
+  - The answer card is always a bit darker than the frame around it (about 73% opaque at 30%, 58% at 85%). Drawers, menus and toasts stay almost solid (at most 12% / 10% see-through) because they sit over the answer text; Settings, Summary and Diagnostics at most 20%, and the main view under them is hidden.
+  - The compact bar and Focus mode use the same level. With click-through on (`Ctrl+Shift+X`) the whole overlay is dimmed on top of it: to 55% when solid, less as you go clearer (about 67% at 30%, 89% at 85%) so the text stays readable.
+  - If your system asks for reduced transparency (Windows: Settings > Accessibility > Visual effects > Transparency effects off; macOS: Reduce transparency), Echo stays solid and the slider is disabled.
+  - Echo's blur only blurs its own content: Windows doesn't blur other apps' windows behind a transparent Electron window, so what's behind shows through sharp. Pick the level that's comfortable over your own call and editor.
 
 ### How Echo keeps answers fast
 

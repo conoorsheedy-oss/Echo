@@ -345,6 +345,28 @@
         </div>
         </section>
 
+        <!-- See-through background (renderer.js, SEE-THROUGH). Only the
+             backgrounds fade; text and icons stay fully opaque. -->
+        <section id="appearance-settings" class="settings-group" aria-labelledby="appearance-settings-title">
+          <h4 id="appearance-settings-title">Appearance</h4>
+          <div class="settings-card">
+          <div class="see-through-setting">
+            <div class="answer-setting">
+              <label for="transparency-range">Transparency</label>
+              <output id="transparency-value" for="transparency-range">30%</output>
+            </div>
+            <input type="range" class="range" id="transparency-range" min="0" max="85" step="5" value="30" aria-describedby="transparency-note" title="How see-through Echo's background is (0% = solid). Text stays solid. Ctrl+Shift+T switches between Solid and this level." />
+            <div id="transparency-presets" class="preset-row" role="group" aria-label="Transparency presets">
+              <button type="button" class="preset-btn" data-transparency="0" aria-pressed="false" title="Solid: no see-through (0%)">Solid</button>
+              <button type="button" class="preset-btn" data-transparency="30" aria-pressed="false" title="Light: a hint of what's behind (30%)">Light</button>
+              <button type="button" class="preset-btn" data-transparency="60" aria-pressed="false" title="Glass: clearly see your call or editor behind (60%)">Glass</button>
+            </div>
+          </div>
+          <p id="transparency-note" class="answer-setting-note">Makes Echo's background see-through so you can watch the call or your code editor behind it. Only the background fades: text stays solid and gets a soft dark outline as you go clearer. Settings and menus stay mostly solid. <kbd>Ctrl+Shift+T</kbd> switches between Solid and your level.</p>
+          <p id="transparency-system-note" class="answer-setting-note hidden">Your system is set to reduce transparency, so Echo stays solid. Turn transparency effects back on in your OS settings to use this.</p>
+        </div>
+        </section>
+
         <!-- Hand gestures (experimental, opt-in). Wired up by gestures.js;
              the gesture table body is rendered from gesture-core.js. -->
         <section id="gesture-settings" class="settings-group" aria-labelledby="gesture-settings-title">

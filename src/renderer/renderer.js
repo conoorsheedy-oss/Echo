@@ -412,6 +412,7 @@ function openSettings(message) {
 
 function closeSettings() {
   settingsOverlay.classList.add('hidden');
+  settingsOverlay.classList.remove('see-through-peek');
   groqKeyInput.value = '';
   geminiKeyInput.value = '';
   deepgramKeyInput.value = '';
@@ -464,8 +465,12 @@ document.getElementById('quit-menu-btn').addEventListener('click', quitEcho);
 
 api.onGenerateHotkey(() => requestSuggestion(undefined, { question: null }));
 api.onClearHotkey(() => clearTranscript());
+// Click-through dims the overlay (#app.click-through in styles.css: 0.55
+// when solid, less when see-through is on since the background is already
+// thin). It only changes opacity; see-through only changes background alpha,
+// so the two stack instead of fighting.
 api.onClickThroughChanged((enabled) => {
-  appEl.style.opacity = enabled ? '0.55' : '1';
+  appEl.classList.toggle('click-through', !!enabled);
 });
 api.onCaptureScreenHotkey(() => captureScreen({ andAnswer: true }));
 api.onSummarizeHotkey(() => requestSummary());
@@ -2134,6 +2139,133 @@ function instantHeadlineEnabled() {
   return instantHeadlineToggle.checked;
 }
 
+// ---- SEE-THROUGH (Settings > Appearance > Transparency, Ctrl+Shift+T) ----
+// Makes the overlay's *background* see-through so the call or code editor
+// behind it shows, while text and icons stay fully opaque (we never use
+// BrowserWindow.setOpacity, which would fade the text too). One number,
+// 0 (solid, the original look) .. 85 (%), goes into the --see-through CSS
+// variable on <html>; styles.css derives every surface's alpha and the
+// text/icon legibility halos from it (section 1 + section 10). Default:
+// 30% ("Light"): you can see what's behind, and body text stays at ~7:1
+// contrast even over a white page, before the halo.
+const SEE_THROUGH_KEY = 'echo.transparency';          // current level, '0'..'85'
+const SEE_THROUGH_LAST_KEY = 'echo.transparencyLast'; // last level above 0 (Ctrl+Shift+T restores it)
+const SEE_THROUGH_MAX = 85;
+const SEE_THROUGH_DEFAULT = 30;
+const transparencyRange = document.getElementById('transparency-range');
+const transparencyValue = document.getElementById('transparency-value');
+const transparencySystemNote = document.getElementById('transparency-system-note');
+const transparencyPresetBtns = Array.from(document.querySelectorAll('#transparency-presets [data-transparency]'));
+const reducedTransparencyQuery = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-reduced-transparency: reduce)')
+  : null;
+let seeThrough = SEE_THROUGH_DEFAULT;
+let seeThroughLast = SEE_THROUGH_DEFAULT;
+
+// null for anything that isn't a number (a missing localStorage value included).
+function clampSeeThrough(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(SEE_THROUGH_MAX, Math.max(0, Math.round(n)));
+}
+
+function systemWantsSolid() {
+  return !!(reducedTransparencyQuery && reducedTransparencyQuery.matches);
+}
+
+function saveSeeThrough() {
+  try {
+    localStorage.setItem(SEE_THROUGH_KEY, String(seeThrough));
+    localStorage.setItem(SEE_THROUGH_LAST_KEY, String(seeThroughLast));
+  } catch (err) { /* not remembered -- fine */ }
+}
+
+function applySeeThrough(value, { save = true } = {}) {
+  const level = clampSeeThrough(value);
+  seeThrough = level === null ? SEE_THROUGH_DEFAULT : level;
+  if (seeThrough > 0) seeThroughLast = seeThrough;
+  const root = document.documentElement;
+  root.style.setProperty('--see-through', (seeThrough / 100).toFixed(2));
+  // Halos + lifted text colours only while it's actually see-through, so
+  // Solid (and a system that asks for reduced transparency) renders exactly
+  // as before.
+  if (seeThrough > 0 && !systemWantsSolid()) root.dataset.seeThrough = 'on';
+  else delete root.dataset.seeThrough;
+
+  transparencyRange.value = String(seeThrough);
+  transparencyRange.style.setProperty('--range-fill', `${(seeThrough / SEE_THROUGH_MAX) * 100}%`);
+  transparencyRange.setAttribute('aria-valuetext', seeThrough === 0 ? 'Solid' : `${seeThrough}% see-through`);
+  transparencyValue.textContent = seeThrough === 0 ? 'Solid' : `${seeThrough}%`;
+  transparencyPresetBtns.forEach((btn) => {
+    btn.setAttribute('aria-pressed', Number(btn.dataset.transparency) === seeThrough ? 'true' : 'false');
+  });
+  if (save) saveSeeThrough();
+}
+
+function syncReducedTransparency() {
+  const solid = systemWantsSolid();
+  transparencySystemNote.classList.toggle('hidden', !solid);
+  transparencyRange.disabled = solid;
+  transparencyPresetBtns.forEach((btn) => { btn.disabled = solid; });
+  applySeeThrough(seeThrough, { save: false });
+}
+
+// Ctrl+Shift+T: Solid <-> your level (Light if you've never picked one).
+function toggleSeeThrough() {
+  if (systemWantsSolid()) {
+    showToast('Transparency is off: your system is set to reduce transparency.', 3000);
+    return;
+  }
+  applySeeThrough(seeThrough > 0 ? 0 : (seeThroughLast || SEE_THROUGH_DEFAULT));
+  showToast(seeThrough > 0 ? `See-through: ${seeThrough}% (Ctrl+Shift+T for solid)` : 'Solid background (Ctrl+Shift+T for see-through)', 2000);
+}
+
+try {
+  const last = clampSeeThrough(localStorage.getItem(SEE_THROUGH_LAST_KEY));
+  if (last) seeThroughLast = last;
+  const saved = clampSeeThrough(localStorage.getItem(SEE_THROUGH_KEY));
+  applySeeThrough(saved === null ? SEE_THROUGH_DEFAULT : saved, { save: false });
+} catch (err) {
+  applySeeThrough(SEE_THROUGH_DEFAULT, { save: false });
+}
+syncReducedTransparency();
+if (reducedTransparencyQuery && typeof reducedTransparencyQuery.addEventListener === 'function') {
+  reducedTransparencyQuery.addEventListener('change', syncReducedTransparency);
+}
+
+// While you drag (or arrow-key) the slider, Settings itself previews the
+// answer card's see-through level (#settings-overlay.see-through-peek).
+let seeThroughPeekHeld = false;
+let seeThroughPeekTimer = null;
+function peekSeeThrough() {
+  settingsOverlay.classList.add('see-through-peek');
+  clearTimeout(seeThroughPeekTimer);
+  if (!seeThroughPeekHeld) {
+    seeThroughPeekTimer = setTimeout(() => settingsOverlay.classList.remove('see-through-peek'), 900);
+  }
+}
+function endSeeThroughPeek() {
+  if (!seeThroughPeekHeld) return;
+  seeThroughPeekHeld = false;
+  peekSeeThrough(); // lingers briefly, then Settings goes back to its own background
+}
+transparencyRange.addEventListener('pointerdown', () => {
+  seeThroughPeekHeld = true;
+  peekSeeThrough();
+});
+window.addEventListener('pointerup', endSeeThroughPeek);
+window.addEventListener('pointercancel', endSeeThroughPeek);
+transparencyRange.addEventListener('input', () => {
+  applySeeThrough(transparencyRange.value, { save: false }); // live while dragging
+  peekSeeThrough();
+});
+transparencyRange.addEventListener('change', () => applySeeThrough(transparencyRange.value));
+transparencyPresetBtns.forEach((btn) => {
+  btn.addEventListener('click', () => applySeeThrough(btn.dataset.transparency));
+});
+api.onToggleTransparencyHotkey(() => toggleSeeThrough());
+
 // ---- Latency stat (Diagnostics): end of their speech -> first answer word ----
 // Measured from the last voiced audio of the latest "Them" chunk (VAD) to
 // the first streamed token of the suggestion that followed it -- from either
@@ -2618,6 +2750,7 @@ const SHORTCUTS_TEXT = [
   'Ctrl+Shift+M  Summarize session',
   'Ctrl+Shift+C  Clear transcript',
   'Ctrl+Shift+X  Click-through on/off',
+  'Ctrl+Shift+T  See-through background on/off',
   'Ctrl+Shift+P  Privacy mode',
   'Ctrl+Shift+H  Hide from screen share',
   'Ctrl+Shift+D  Diagnostics',

@@ -13,7 +13,8 @@
      7. Full-window panels (settings, summary, diagnostics)
      8. Modes (compact bar, focus, narrow widths)
      9. Hand gestures (experimental, opt-in)
-    10. Motion + reduced motion
+    10. See-through (transparency setting, legibility halos, click-through)
+    11. Motion + reduced motion
    ===================================================================== */
 
 /* ---------------------------------------------------------------------
@@ -22,11 +23,46 @@
 :root {
   color-scheme: dark; /* native select popups, checkboxes, scrollbars go dark */
 
-  /* Surfaces. The app background is near-opaque so text keeps its contrast
-     over bright windows; blur + a hairline border keep it feeling light. */
-  --bg-app: rgba(16, 17, 21, 0.955);
-  --bg-overlay: rgba(16, 17, 21, 0.985);
-  --bg-raised: #1f2027;          /* menu, toast, drawers: float above everything */
+  /* See-through (Settings > Appearance > Transparency, Ctrl+Shift+T).
+     renderer.js sets --see-through on <html>: 0 = solid (the original look)
+     up to 0.85. Every surface's alpha below derives from it, so the frame,
+     card, drawers, menus and panels stay consistent. Only backgrounds fade:
+     text and icons stay fully opaque (never BrowserWindow.setOpacity). */
+  --see-through: 0;
+  --surface-alpha: calc(1 - var(--see-through));     /* 1 solid .. 0.15 */
+  --legibility: calc(var(--see-through) / 0.85);     /* 0..1: how hard to protect text */
+
+  /* Surfaces. Solid, the app background is near-opaque so text keeps its
+     contrast over bright windows; blur + a hairline border keep it light. */
+  --bg-app: rgb(16 17 21 / calc(0.955 * var(--surface-alpha)));
+  /* Extra dark fill under the answer card (none when solid), so the text
+     you read always sits on a darker layer than the frame around it:
+     ~0.76 total opacity at 30% (frame 0.67), ~0.8 at the 85% maximum
+     (frame 0.14): the frame goes see-through, the answer stays readable. */
+  --bg-card: rgb(16 17 21 / min(0.8, calc(0.9 * var(--see-through))));
+  /* Dark backing behind the frame's ghost controls (top bar, dock, card
+     header + toolbar), so icons and labels read over a white page even
+     where the frame itself is nearly clear. */
+  --ctl-backing: rgb(16 17 21 / calc(0.62 * var(--legibility)));
+  --ctl-backing-hover: rgb(58 60 72 / calc(0.55 + 0.4 * var(--legibility)));
+  /* Settings / Summary / Diagnostics: capped, at most 20% see-through. */
+  --bg-overlay: rgb(16 17 21 / calc(0.985 * (1 - min(var(--see-through), 0.2))));
+  --bg-raised: #1f2027;          /* opaque: native <option> popups */
+  /* Drawers (capped at 12%), menu + toast (capped at 10%): they float over
+     the answer card's own text, so they stay nearly solid or that text
+     would show through them. */
+  --bg-drawer: rgb(31 32 39 / calc(1 - min(var(--see-through), 0.12)));
+  --bg-menu: rgb(31 32 39 / calc(1 - min(var(--see-through), 0.1)));
+  --code-bg: rgb(0 0 0 / calc(0.28 + 0.3 * var(--legibility)));
+  /* Legibility halo for text and icons: a soft dark glow hugging each glyph,
+     so light text reads over white pages and busy video. Scales with the
+     see-through level; only switched on while it's above 0 (see
+     html[data-see-through] below) so Solid renders exactly as before. */
+  --halo: min(1, calc(1.1 * var(--legibility) + 0.15));
+  --text-halo: 0 0 1px rgb(0 0 0 / var(--halo)),
+               0 1px 2px rgb(0 0 0 / var(--halo)),
+               0 0 6px rgb(0 0 0 / calc(0.75 * var(--halo)));
+  --icon-halo: drop-shadow(0 0 1px rgb(0 0 0 / var(--halo))) drop-shadow(0 1px 2px rgb(0 0 0 / calc(0.8 * var(--halo))));
   --dot-idle: #5c5d68;
   --surface-1: rgba(255, 255, 255, 0.035);
   --surface-2: rgba(255, 255, 255, 0.065);
@@ -122,6 +158,25 @@
   --dur: 180ms;
   --dur-slow: 260ms;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* See-through is on (renderer.js sets data-see-through when the level is
+   above 0). Secondary text is lifted toward white as the background thins,
+   so muted labels never sink into a bright window behind the overlay, and
+   the frame's hairline gets a touch stronger so the window edge stays
+   visible. The text/icon halos are applied in section 11. */
+html[data-see-through] {
+  --text: color-mix(in srgb, #ececf1, #ffffff calc(var(--legibility) * 100%));
+  --text-muted: color-mix(in srgb, #b4b5bf, #ffffff calc(var(--legibility) * 50%));
+  --text-subtle: color-mix(in srgb, #9a9ba7, #ffffff calc(var(--legibility) * 50%));
+  --border: rgb(255 255 255 / calc(0.10 + 0.08 * var(--legibility)));
+}
+
+/* The OS asks for less transparency (Windows: Settings > Accessibility >
+   Visual effects > Transparency effects off; macOS: Reduce transparency):
+   stay solid whatever the slider says. Beats renderer.js's inline value. */
+@media (prefers-reduced-transparency: reduce) {
+  :root { --see-through: 0 !important; }
 }
 
 /* ---------------------------------------------------------------------
@@ -626,7 +681,7 @@ option {
   flex-direction: column;
   gap: var(--sp-1);
   padding: var(--sp-2);
-  background: var(--bg-raised);
+  background: var(--bg-menu);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-pop);
@@ -691,7 +746,9 @@ option {
   min-height: 0;
   min-width: 0;
   margin: 0 var(--sp-4);
-  background: var(--surface-1);
+  /* The faint white tint, over the see-through card fill (none when solid). */
+  background-color: var(--bg-card);
+  background-image: linear-gradient(var(--surface-1), var(--surface-1));
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-card);
@@ -1041,7 +1098,7 @@ option {
 #chat-log pre.code-block {
   white-space: pre-wrap;
   word-break: break-word;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--code-bg);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
   padding: var(--sp-4) var(--sp-5);
@@ -1165,7 +1222,7 @@ option {
   height: clamp(200px, 56vh, 460px);
   max-height: calc(100vh - var(--bar-h) - var(--dock-h) - var(--sp-4));
   min-width: 0;
-  background: var(--bg-raised);
+  background: var(--bg-drawer);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-pop);
@@ -1470,7 +1527,7 @@ option {
   width: max-content;
   max-width: calc(100% - 24px);
   padding: var(--sp-4) var(--sp-6);
-  background: var(--bg-raised);
+  background: var(--bg-menu);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-pop);
@@ -2019,7 +2076,7 @@ option {
   font-size: var(--fs-xs);
   font-weight: 600;
   color: var(--text-strong);
-  background: var(--bg-raised);
+  background: var(--bg-menu);
   border: 1px solid var(--accent-border);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-pop);
@@ -2118,7 +2175,182 @@ option {
 
 
 /* ---------------------------------------------------------------------
-   10. Motion (kept last so the reduced-motion overrides win)
+   10. See-through: Settings > Appearance > Transparency (renderer.js,
+       SEE-THROUGH). The surfaces themselves read their alpha from the
+       tokens in section 1; this section is the control and the halos.
+   --------------------------------------------------------------------- */
+.see-through-setting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+#transparency-value {
+  min-width: 4ch;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  color: var(--text-strong);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Range slider: accent fill up to the thumb (--range-fill set by renderer.js) */
+input[type="range"].range {
+  --range-fill: 0%;
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+}
+input[type="range"].range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(to right, var(--accent) var(--range-fill), var(--surface-4) var(--range-fill));
+}
+input[type="range"].range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--accent-fill);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition: transform var(--dur-fast) var(--ease);
+}
+input[type="range"].range:hover::-webkit-slider-thumb { transform: scale(1.1); }
+input[type="range"].range:focus-visible { box-shadow: none; }
+input[type="range"].range:focus-visible::-webkit-slider-thumb { box-shadow: var(--focus-ring); }
+input[type="range"].range:disabled { cursor: not-allowed; opacity: 0.5; }
+
+/* Solid / Light / Glass */
+.preset-row {
+  display: flex;
+  gap: var(--sp-3);
+}
+.preset-btn {
+  flex: 1 1 0;
+  height: var(--ctl-h);
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  border-radius: var(--r-pill);
+}
+.preset-btn[aria-pressed="true"],
+.preset-btn[aria-pressed="true"]:hover {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+#transparency-system-note { color: var(--warn); }
+
+/* Legibility halos (only while see-through is on). text-shadow inherits, so
+   one rule on #app covers all text; form controls reset it in the UA sheet,
+   so they get it explicitly. Icons are SVG strokes, which text-shadow
+   doesn't reach: they get a drop-shadow filter. The answer text also gets a
+   slightly heavier weight as the background thins. */
+html[data-see-through] #app,
+html[data-see-through] #app button,
+html[data-see-through] #app select,
+html[data-see-through] #app input {
+  text-shadow: var(--text-halo);
+}
+html[data-see-through] #app .icon {
+  filter: var(--icon-halo);
+}
+html[data-see-through] #suggestion-text {
+  font-weight: calc(400 + 120 * var(--legibility));
+}
+html[data-see-through] #suggestion-text p.headline {
+  font-weight: calc(650 + 100 * var(--legibility));
+}
+/* Filled controls (accent / danger) and code already sit on their own solid
+   colour: a dark halo there only smudges the text. */
+html[data-see-through] #app button.primary,
+html[data-see-through] #app .new-answer-chip,
+html[data-see-through] #app .dock-badge,
+html[data-see-through] #app pre.code-block {
+  text-shadow: none;
+}
+html[data-see-through] #app button.primary .icon { filter: none; }
+
+/* Ghost controls on the thin frame get their own dark backing (a small
+   chip each); hover / open states keep a visible lift on top of it. */
+html[data-see-through] :is(#header, #dock, .card-head, #suggestion-actions) :is(.icon-btn, .dock-btn, .tool-btn, #mode-select, .segmented) {
+  background-color: var(--ctl-backing);
+}
+html[data-see-through] :is(#header, #dock, .card-head, #suggestion-actions) :is(.icon-btn, .dock-btn, .tool-btn, #mode-select):is(:hover, .active, [aria-expanded="true"]) {
+  background-color: var(--ctl-backing-hover);
+}
+html[data-see-through] #dock .dock-capture,
+html[data-see-through] #header #compact-btn.active {
+  background-color: rgb(61 109 228 / calc(0.25 + 0.45 * var(--legibility)));
+  color: #fff;
+}
+html[data-see-through] #dock .dock-capture:disabled {
+  background-color: var(--ctl-backing);
+  color: var(--text-muted);
+}
+html[data-see-through] #header #hide-btn:hover {
+  background-color: rgb(211 58 54 / calc(0.25 + 0.5 * var(--legibility)));
+  color: #fff;
+}
+/* Tinted chips on the thin frame (status badges, the banner): the same dark
+   backing, with their colour tint layered on top so they keep their meaning. */
+html[data-see-through] #header .status-badge,
+html[data-see-through] #key-warning {
+  background-color: var(--ctl-backing);
+  background-image: linear-gradient(var(--chip-tint), var(--chip-tint));
+}
+html[data-see-through] #thinking-indicator,
+html[data-see-through] #gesture-badge,
+html[data-see-through] #key-warning[data-kind="keys"] { --chip-tint: var(--accent-soft); }
+html[data-see-through] #privacy-badge,
+html[data-see-through] #key-warning { --chip-tint: var(--warn-soft); }
+html[data-see-through] #content-protection-badge,
+html[data-see-through] #key-warning[data-kind="offline"] { --chip-tint: var(--danger-soft); }
+html[data-see-through] #gesture-badge:hover { --chip-tint: var(--accent-soft-hover); }
+
+/* The question line is small: one step brighter than when solid. */
+html[data-see-through] #suggestion-question { color: var(--text-muted); }
+
+/* A full-window panel (Settings, Summary, Diagnostics) is open: the main
+   view under it is hidden, so through the panel's capped background you
+   see only what's behind Echo, never the answer card's text mixed in. */
+html[data-see-through] #app:has(> :is(#settings-overlay, #summary-overlay, #diagnostics-overlay):not(.hidden)) > :is(#header, #key-warning, #suggestion-section, #drawers, #dock) {
+  visibility: hidden;
+}
+
+/* Live preview while dragging the slider: Settings itself turns into the
+   answer card's see-through level (other panels hidden), so you see what
+   you'll get rather than the capped Settings background. */
+#settings-overlay.see-through-peek {
+  background: var(--bg-card);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+#app:has(#settings-overlay.see-through-peek) > :not(#settings-overlay):not(#toast) {
+  visibility: hidden;
+}
+
+/* Click-through (Ctrl+Shift+X, main.js) dims the whole overlay so you can
+   tell clicks go to the app underneath. Solid, that's 0.55 (as before);
+   with see-through on, the background is already thin, so it dims less
+   (0.67 at 30%, 0.89 at 85%) and the text stays readable. */
+#app.click-through {
+  opacity: calc(0.55 + 0.4 * var(--see-through));
+}
+
+/* ---------------------------------------------------------------------
+   11. Motion (kept last so the reduced-motion overrides win)
    --------------------------------------------------------------------- */
 @keyframes echo-blink {
   0%, 100% { opacity: 0.25; }

@@ -518,6 +518,13 @@ function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Shift+D', () => {
     overlayWindow?.webContents.send('hotkey:diagnostics');
   });
+
+  // Toggle the see-through background: Solid <-> the level picked in
+  // Settings > Appearance > Transparency (the renderer owns the level; it
+  // only fades backgrounds, never the text -- no setOpacity here).
+  globalShortcut.register('CommandOrControl+Shift+T', () => {
+    overlayWindow?.webContents.send('hotkey:toggle-transparency');
+  });
 }
 
 // One Echo at a time: launching it again (e.g. from the desktop shortcut)

@@ -73,4 +73,6 @@ contextBridge.exposeInMainWorld('assistant', {
   onToggleExpandHotkey: (cb) => ipcRenderer.on('hotkey:toggle-expand', cb),
   onPrivacyModeChanged: (cb) => ipcRenderer.on('hotkey:privacy-mode-changed', (_e, val) => cb(val)),
   onDiagnosticsHotkey: (cb) => ipcRenderer.on('hotkey:diagnostics', cb),
+  // Ctrl+Shift+T: see-through background Solid <-> your level (renderer.js, SEE-THROUGH).
+  onToggleTransparencyHotkey: (cb) => ipcRenderer.on('hotkey:toggle-transparency', cb),
 });

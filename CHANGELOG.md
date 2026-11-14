@@ -2,6 +2,11 @@
 
 ## 0.2.0 – unreleased
 
+- **Adjustable see-through background.** Settings > **Appearance** > **Transparency**: a slider from 0% (solid, the old look) to 85%, with **Solid** / **Light** / **Glass** presets (0 / 30 / 60%). Default is **Light (30%)**, so you can see your call or code editor behind Echo out of the box while body text keeps about 7:1 contrast even over a white page, before the halo. Applies live while you drag (Settings previews the level while you hold the slider) and is remembered (`echo.transparency`). `Ctrl+Shift+T` (new global shortcut) switches between Solid and your level.
+  - Only backgrounds fade, never text (no `BrowserWindow.setOpacity`): one CSS variable, `--see-through`, drives the alpha of the frame, answer card, drawers, menu, toast and the Settings / Summary / Diagnostics panels. The answer card always stays darker than the frame; drawers, menus and toasts are capped at 12% / 10% and full-window panels at 20% (with the main view hidden under them) so nothing reads through onto other text.
+  - Legibility protection scales with the level: a soft dark text halo, icon drop-shadows, lighter grey labels, slightly bolder answer text, and a dark backing behind the frame's icon buttons, status badges and banner. Checked over a white text page, a bright "video call" and a code editor.
+  - Compact bar and Focus mode use the same level. Click-through (`Ctrl+Shift+X`) now dims less when see-through is on (0.55 when solid, up to 0.89 at 85%), so the text stays readable. `prefers-reduced-transparency` keeps Echo solid.
+
 - **Suggestion-first UI.** The answer is what people look at, so the window is now a slim top bar, one large answer card and an icon dock. No behaviour, shortcut or prompt changed.
   - **Top bar**: status dot, one **Start / Stop** button (red with a soft pulse while listening), the mode dropdown, the `⋯` menu, compact bar and hide. Status shows as small icons only while it's on (thinking, Privacy Mode, hidden from screen share, gestures); the Live pill is gone (the green dot and red Stop say it).
   - **Answer card**: bigger first line and body text, a **Script | Cues** toggle and **Generate** in its header, the **New answer ready** chip beside them, and an icon toolbar (Shorten, Expand, Regenerate, **Copy**) as its footer. The empty state is an icon and one line.
