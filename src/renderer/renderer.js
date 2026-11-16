@@ -1,8 +1,8 @@
 // Echo overlay UI. Talks to the main process only through window.assistant
 // (preload.js), wrapped below as `api`. vad-core.js, pcm-core.js,
-// stt-core.js, question-core.js and intent-core.js load before this file
-// (window.EchoVadCore / EchoPcmCore / EchoSttCore / EchoQuestionCore /
-// EchoIntentCore);
+// stt-core.js, question-core.js, intent-core.js and early-start-core.js load
+// before this file (window.EchoVadCore / EchoPcmCore / EchoSttCore /
+// EchoQuestionCore / EchoIntentCore / EchoEarlyStartCore);
 // gestures.js loads after it and uses window.echoGestureBridge (bottom of
 // this file).
 
@@ -23,6 +23,11 @@ const Question = window.EchoQuestionCore;
 // before (looksLikeQuestion); meeting / general also trigger on
 // disagreement, proposals, problems and requests for ideas.
 const Intent = window.EchoIntentCore;
+// Deepgram mode: start an automatic answer from the interviewer's interim
+// text once it reads like a complete question and has stopped changing, and
+// label which end-of-speech signal started each answer -- see
+// early-start-core.js and "Early start" below.
+const EarlyStart = window.EchoEarlyStartCore;
 
 let micStream = null;
 let systemStream = null;
@@ -70,6 +75,9 @@ let lastAutoQuestionKey = '';
 let pendingTriggerIntent = null;
 let themCharsTotal = 0;
 let themCharsAtLastAuto = 0;
+// Which end-of-speech signal scheduled the pending automatic suggestion
+// (Diagnostics > Last answer timing): { trigger, detail, gapMs }.
+let pendingAutoTrigger = null;
 
 // ---- DOM ----
 const statusDot = document.getElementById('status-dot');
@@ -550,6 +558,7 @@ function appendLine(speaker, text, meta = null) {
   noteTranscriptLineForDock();
 
   const delay = autoSuggestDelay(text, meta);
+  let trigger = null;
   if (speaker === 'Them') {
     themCharsTotal += text.length;
     const now = performance.now();
@@ -557,8 +566,12 @@ function appendLine(speaker, text, meta = null) {
       speechEndAt: meta && Number.isFinite(meta.speechEndAt) ? meta.speechEndAt : now,
       transcribedAt: now,
     };
+    trigger = signalTrigger(EarlyStart.triggerFor({ stt: meta && meta.stt, cut: meta && meta.cut, reason: meta && meta.endReason }), lastThemChunk.speechEndAt, now);
+    // The final line of an utterance an early request was started on: the
+    // same question -> that request answers it, nothing more to do here.
+    if (reconcileEarlyStart(text) === 'keep') return;
     // They're still talking: push a scheduled auto-suggestion back.
-    if (autoSuggestTimer) scheduleAutoSuggest(delay);
+    if (autoSuggestTimer) scheduleAutoSuggest(delay, trigger);
   }
 
   // This is the chunk we were waiting for (the rest of a question that
@@ -568,7 +581,7 @@ function appendLine(speaker, text, meta = null) {
     clearTimeout(pendingQuestionTimer);
     pendingQuestionTimer = null;
     pendingTriggerIntent = null; // worked out again on the whole question
-    scheduleAutoSuggest(delay);
+    scheduleAutoSuggest(delay, trigger);
     return;
   }
 
@@ -581,7 +594,7 @@ function appendLine(speaker, text, meta = null) {
     pendingTriggerIntent = decision.intent;
     if (/\?\s*$/.test(text.trim()) || (meta && meta.cut === 'silence')) {
       // Ends with "?", or they stopped talking: the question is done.
-      scheduleAutoSuggest(delay);
+      scheduleAutoSuggest(delay, trigger);
     } else {
       // A question started but may continue in the next chunk: wait for it
       // (with a safety-net timeout) rather than answering half a question.
@@ -591,7 +604,8 @@ function appendLine(speaker, text, meta = null) {
       pendingQuestionTimer = setTimeout(() => {
         awaitingNextThemLine = false;
         pendingQuestionTimer = null;
-        autoSuggest(); // already waited well past the quiet window
+        // Already waited well past the quiet window.
+        autoSuggest(signalTrigger({ trigger: 'other', detail: 'timeout' }, lastThemChunk && lastThemChunk.speechEndAt, performance.now()));
       }, (meta && meta.cut === 'max' ? VAD_MAX_CHUNK_MS : CHUNK_MS) + 4000); // one full chunk + generous STT margin
     }
   }
@@ -645,8 +659,8 @@ function noteAutoTrigger(decision) {
 // ---- Live (interim) lines: Deepgram mode only ----
 // One dimmed in-progress line per speaker at the bottom of the transcript,
 // replaced as Deepgram refines its guess and removed when the final line
-// lands (appendLine). It's display-only: never part of the transcript sent
-// to Gemini, and it never triggers an answer.
+// lands (appendLine). Never part of the transcript sent to Gemini; a "Them"
+// interim can start an automatic answer early (see "Early start" below).
 const interimEls = new Map(); // speaker -> element
 
 function setInterimLine(speaker, text) {
@@ -679,17 +693,173 @@ function clearInterimLines() {
 // waiting for its second half -- or a 1.5 s "maybe there's more" wait -- is
 // done, so answer now. UtteranceEnd comes ~1 s after the last word: it's the
 // fallback for when speech_final didn't settle it.
-function handleEndOfSpeech(speaker, speechEndAt) {
+function handleEndOfSpeech(speaker, speechEndAt, reason) {
   if (speaker !== 'Them') return;
-  if (lastThemChunk) lastThemChunk = { speechEndAt, transcribedAt: performance.now() };
+  const now = performance.now();
+  if (lastThemChunk) lastThemChunk = { speechEndAt, transcribedAt: now };
+  const trigger = signalTrigger(EarlyStart.triggerFor({ stt: 'deepgram', reason: reason || 'utterance_end' }), speechEndAt, now);
   if (awaitingNextThemLine) {
     awaitingNextThemLine = false;
     clearTimeout(pendingQuestionTimer);
     pendingQuestionTimer = null;
-    scheduleAutoSuggest(Question.LIVE_QUESTION_DELAY_MS);
+    scheduleAutoSuggest(Question.LIVE_QUESTION_DELAY_MS, trigger);
   } else if (autoSuggestTimer) {
-    scheduleAutoSuggest(Question.LIVE_QUESTION_DELAY_MS);
+    scheduleAutoSuggest(Question.LIVE_QUESTION_DELAY_MS, trigger);
   }
+}
+
+// { trigger, detail } + how long after the last voiced audio the signal came.
+function signalTrigger(t, speechEndAt, at) {
+  return { trigger: t.trigger, detail: t.detail || '', gapMs: msBetween(speechEndAt, at), outcome: '' };
+}
+
+// ---- Early start (Deepgram mode, "Them" only, automatic answers only) ----
+// Deepgram's speech_final doesn't always fire (e.g. on TTS or music-backed
+// system audio); the line then waits for UtteranceEnd (~1 s) plus
+// processing. So while the interviewer's interim text is on screen, once it
+// reads like a complete question that needs an answer and has not changed
+// for EarlyStart.EARLY_START_MS (350 ms), the automatic request starts with
+// that text as its question (trigger 'early_interim'). The interim text is
+// never added to the transcript: the request's transcript is the finished
+// lines only, the question travels separately.
+// When the final line lands, appendLine() -> reconcileEarlyStart():
+//   keep     same words (punctuation / fillers / a trailing "okay" aside):
+//            the request in flight answers it; de-dup marks it answered.
+//   restart  they kept talking or the words changed: the de-dup state goes
+//            back to before the early start and the normal path judges the
+//            full line; its request supersedes the early one (CALM rule in
+//            requestSuggestion: an early answer already on screen for
+//            SWAP_WINDOW_MS is left to finish and the new one waits behind
+//            the "New answer ready" chip).
+// Never for "You", in Privacy Mode, on Groq (no interim text) or for
+// requests the user asked for.
+const earlyStart = {
+  text: '', // the current "Them" utterance (settled pieces + latest guess)
+  confidence: null,
+  changedAt: 0,
+  timer: null,
+  // The early request for the current utterance, until its final lands:
+  // { text, key, prevKey, prevChars, trigger, intent, reqId, failed }
+  fired: null,
+};
+
+function noteThemInterim(text, confidence) {
+  const t = String(text || '').trim();
+  if (t === earlyStart.text) return;
+  earlyStart.text = t;
+  earlyStart.confidence = Number.isFinite(confidence) ? confidence : null;
+  earlyStart.changedAt = performance.now();
+  clearTimeout(earlyStart.timer);
+  earlyStart.timer = t ? setTimeout(maybeEarlyStart, EarlyStart.EARLY_START_MS) : null;
+}
+
+// The utterance ended (final line / end of speech): stop watching it.
+function clearEarlyInterim() {
+  clearTimeout(earlyStart.timer);
+  earlyStart.timer = null;
+  earlyStart.text = '';
+  earlyStart.confidence = null;
+}
+
+function resetEarlyStart() {
+  clearEarlyInterim();
+  earlyStart.fired = null;
+}
+
+function maybeEarlyStart() {
+  earlyStart.timer = null;
+  if (!listening) return;
+  const text = earlyStart.text;
+  const provider = systemRecorder && systemRecorder.mode() === 'deepgram' ? 'deepgram' : 'groq';
+  const decision = EarlyStart.shouldEarlyStart({
+    text,
+    lastChangeAt: earlyStart.changedAt,
+    now: performance.now(),
+    speaker: 'Them',
+    provider,
+    privacy: privacyModeEnabled,
+    confidence: earlyStart.confidence,
+    mode: modeSelect.value,
+    intentCtx: intentContext(),
+  });
+  if (!decision.fire) return;
+  const prior = earlyStart.fired;
+  // Already answering this (they paused again on the same words).
+  if (prior && EarlyStart.reconcileFinal({ provisional: prior.text, final: text }) === 'keep') return;
+  const question = earlyQuestion(text);
+  const key = questionKey(question);
+  if (!key || key === lastAutoQuestionKey) return; // already answered this one
+  if (themCharsTotal + text.length - themCharsAtLastAuto < MIN_NEW_THEM_CHARS) return; // tiny change
+  const now = performance.now();
+  const speechEndAt = liveSpeechEndAt('Them');
+  const trigger = signalTrigger({ trigger: 'early_interim' }, speechEndAt, now);
+  trigger.outcome = 'pending';
+  earlyStart.fired = {
+    text,
+    key,
+    // De-dup state to go back to on a restart (from the first early start
+    // of this utterance, if it fired more than once).
+    prevKey: prior ? prior.prevKey : lastAutoQuestionKey,
+    prevChars: prior ? prior.prevChars : themCharsAtLastAuto,
+    trigger,
+    intent: decision.intent,
+    reqId: null,
+    failed: false,
+  };
+  lastAutoQuestionKey = key;
+  themCharsAtLastAuto = themCharsTotal + text.length; // the final line will add about this much
+  awaitingNextThemLine = false;
+  clearTimeout(pendingQuestionTimer);
+  pendingQuestionTimer = null;
+  pendingTriggerIntent = null;
+  cancelAutoSuggest();
+  lastAutoNote = `fired early (${decision.intent.intent}, ${decision.intent.confidence})`;
+  if (!diagnosticsOverlay.classList.contains('hidden')) renderDiagnostics();
+  requestSuggestion(undefined, {
+    question,
+    auto: true,
+    intent: decision.intent,
+    trigger,
+    early: earlyStart.fired,
+    latencyFrom: { speechEndAt, transcribedAt: now },
+  });
+}
+
+// Like recentThemQuestion(), with the provisional text as their last line.
+function earlyQuestion(text) {
+  let prev = null;
+  for (let i = transcriptLines.length - 1; i >= 0; i--) {
+    if (transcriptLines[i].speaker === 'Them') { prev = transcriptLines[i]; break; }
+  }
+  return prev && Date.now() - prev.ts <= QUESTION_JOIN_MS ? `${prev.text} ${text}` : text;
+}
+
+// A "Them" final line landed (appendLine): 'keep' | 'restart' | null (no
+// early request for this utterance).
+function reconcileEarlyStart(finalText) {
+  clearEarlyInterim();
+  const early = earlyStart.fired;
+  earlyStart.fired = null;
+  if (!early) return null;
+  const verdict = early.failed ? 'restart' : EarlyStart.reconcileFinal({ provisional: early.text, final: finalText });
+  early.trigger.outcome = verdict === 'keep' ? 'kept' : 'restarted';
+  if (verdict === 'keep') {
+    // Answered: the normal path must not ask again for this line.
+    lastAutoQuestionKey = questionKey(recentThemQuestion());
+    themCharsAtLastAuto = themCharsTotal;
+    awaitingNextThemLine = false;
+    clearTimeout(pendingQuestionTimer);
+    pendingQuestionTimer = null;
+    pendingTriggerIntent = null;
+    cancelAutoSuggest();
+    lastAutoNote = `fired early, kept (${early.intent.intent})`;
+  } else if (lastAutoQuestionKey === early.key) {
+    // Judge the full line as if the early start hadn't happened.
+    lastAutoQuestionKey = early.prevKey;
+    themCharsAtLastAuto = early.prevChars;
+  }
+  if (!diagnosticsOverlay.classList.contains('hidden')) renderDiagnostics();
+  return verdict;
 }
 
 // The other side's latest question, for the "Re: ..." line above the answer:
@@ -704,11 +874,12 @@ function recentThemQuestion() {
   return parts.join(' ');
 }
 
-function scheduleAutoSuggest(delay = AUTO_SUGGEST_QUIET_MS) {
+function scheduleAutoSuggest(delay = AUTO_SUGGEST_QUIET_MS, trigger = null) {
   clearTimeout(autoSuggestTimer);
+  if (trigger) pendingAutoTrigger = trigger;
   autoSuggestTimer = setTimeout(() => {
     autoSuggestTimer = null;
-    autoSuggest();
+    autoSuggest(pendingAutoTrigger);
   }, delay);
 }
 
@@ -722,7 +893,9 @@ function questionKey(text) {
 }
 
 // Automatic (question-detected) suggestion. Privacy Mode pauses these.
-function autoSuggest() {
+// trigger: which end-of-speech signal released it (Diagnostics).
+function autoSuggest(trigger = null) {
+  pendingAutoTrigger = null;
   if (privacyModeEnabled || !listening) return;
   const question = recentThemQuestion();
   const key = questionKey(question);
@@ -732,7 +905,7 @@ function autoSuggest() {
   themCharsAtLastAuto = themCharsTotal;
   const intent = pendingTriggerIntent || classifyForSend(question);
   pendingTriggerIntent = null;
-  requestSuggestion(undefined, { question, auto: true, intent });
+  requestSuggestion(undefined, { question, auto: true, intent, trigger: trigger || { trigger: 'other', detail: '', gapMs: null, outcome: '' } });
 }
 
 // Clearing the transcript starts a fresh session: earlier answers and any
@@ -748,6 +921,8 @@ function clearTranscript() {
   cancelAutoSuggest();
   lastAutoQuestionKey = '';
   pendingTriggerIntent = null;
+  pendingAutoTrigger = null;
+  resetEarlyStart();
   themCharsTotal = 0;
   themCharsAtLastAuto = 0;
   lastThemChunk = null;
@@ -1531,19 +1706,28 @@ function deepgramFailed(stream, speaker, indicatorEl, err) {
 
 let lastDeepgramStatus = {}; // speaker -> 'open' | 'reconnecting' | 'closed' (diagnostics)
 
+// performance.now() of the speaker's last voiced audio (the stream's VAD),
+// or now if there's none recent.
+function liveSpeechEndAt(speaker) {
+  const pipeline = pipelineFor(speaker);
+  const t = pipeline && pipeline.mode() === 'deepgram' ? pipeline.lastVoicedAt() : -Infinity;
+  const now = performance.now();
+  return Number.isFinite(t) && now - t < 5000 ? t : now;
+}
+
 api.onSttEvent((ev) => {
   if (!ev || (ev.speaker !== 'You' && ev.speaker !== 'Them')) return;
   const speaker = ev.speaker;
   const pipeline = pipelineFor(speaker);
   const live = !!pipeline && pipeline.mode() === 'deepgram';
-  const speechEndAt = () => {
-    const t = live ? pipeline.lastVoicedAt() : -Infinity;
-    const now = performance.now();
-    return Number.isFinite(t) && now - t < 5000 ? t : now;
-  };
+  const speechEndAt = () => liveSpeechEndAt(speaker);
   switch (ev.kind) {
     case 'interim':
-      if (listening && live) setInterimLine(speaker, typeof ev.text === 'string' ? ev.text : '');
+      if (listening && live) {
+        const text = typeof ev.text === 'string' ? ev.text : '';
+        setInterimLine(speaker, text);
+        if (speaker === 'Them') noteThemInterim(text, ev.confidence);
+      }
       break;
     case 'final': {
       setInterimLine(speaker, '');
@@ -1560,12 +1744,15 @@ api.onSttEvent((ev) => {
         cut: ev.endOfSpeech ? 'silence' : 'max',
         live: !!ev.endOfSpeech,
         speechEndAt: speechEndAt(),
+        stt: 'deepgram',
+        endReason: typeof ev.reason === 'string' ? ev.reason : '',
       });
       break;
     }
     case 'end-of-speech':
       setInterimLine(speaker, '');
-      handleEndOfSpeech(speaker, speechEndAt());
+      if (speaker === 'Them') clearEarlyInterim();
+      handleEndOfSpeech(speaker, speechEndAt(), typeof ev.reason === 'string' ? ev.reason : '');
       break;
     case 'status':
       lastDeepgramStatus[speaker] = ev.state;
@@ -1760,6 +1947,7 @@ async function stopListening() {
   clearTimeout(pendingQuestionTimer);
   pendingQuestionTimer = null;
   cancelAutoSuggest();
+  resetEarlyStart();
 
   micRecorder?.stop();
   systemRecorder?.stop();
@@ -2064,6 +2252,7 @@ function renderStreamFrame(req) {
     // First words of an answer the user asked for (or of the first answer):
     // only now does the old answer leave the screen.
     req.started = true;
+    req.shownAt = performance.now();
     panelState = 'streaming';
     lastSuggestion = '';
     showSuggestionError('');
@@ -2385,6 +2574,7 @@ function noteFirstToken(req, part = 'answer') {
       answerMs: null,
       via: part,
       auto: req.auto,
+      trigger: req.trigger, // same object: an early start's kept / restarted shows up later
     };
     lastTiming = req.timing;
     if (req.timing.totalMs !== null) {
@@ -2405,11 +2595,20 @@ function describeLatency() {
   return `last ${last.totalMs} ms (${last.auto ? 'auto' : 'manual'}, via ${via}; speech-to-text ${last.sttMs} ms) · avg of last ${latencySamples.length}: ${avg} ms`;
 }
 
+function describeTrigger(tr) {
+  if (!tr) return 'trigger: manual';
+  const bits = [];
+  if (tr.detail) bits.push(tr.detail);
+  if (tr.gapMs !== null && tr.gapMs !== undefined) bits.push(`+${tr.gapMs} ms after last audio`);
+  if (tr.outcome) bits.push(tr.outcome);
+  return `trigger: ${tr.trigger}${bits.length ? ` (${bits.join(', ')})` : ''}`;
+}
+
 function describeTimingSplit() {
   const t = lastTiming;
   if (!t) return 'no answers yet';
   const fmt = (ms) => (ms === null ? '--' : `${ms} ms`);
-  return `speech end → request ${fmt(t.sendMs)} · request → first line ${t.headlineMs === null ? (instantHeadlineEnabled() ? '-- (none / dropped)' : '-- (off)') : `${t.headlineMs} ms`} · request → full answer ${fmt(t.answerMs)}`;
+  return `${describeTrigger(t.trigger)} · speech end → request ${fmt(t.sendMs)} · request → first line ${t.headlineMs === null ? (instantHeadlineEnabled() ? '-- (none / dropped)' : '-- (off)') : `${t.headlineMs} ms`} · request → full answer ${fmt(t.answerMs)}`;
 }
 
 // Streamed text for suggestions and chat answers (see main.js 'ai:chunk').
@@ -2444,6 +2643,10 @@ api.onAiChunk((payload) => {
 // opts.intent: intent-core.js result for the line being answered (worked
 //            out here when missing). Explicit requests always answer: the
 //            intent only shapes the prompt, needsResponse is ignored.
+// opts.trigger: { trigger, detail, gapMs, outcome } -- the end-of-speech
+//            signal that released an automatic request (Diagnostics).
+// opts.early: the earlyStart.fired record of an early-start request.
+// opts.latencyFrom: { speechEndAt, transcribedAt } instead of the last line's.
 async function requestSuggestion(instruction, opts = {}) {
   // Works with or without listening (e.g. a screenshot-only question) --
   // it only needs the Gemini key.
@@ -2465,9 +2668,18 @@ async function requestSuggestion(instruction, opts = {}) {
   const intentInfo = opts.intent || classifyForSend(questionLine || recentThemQuestion() || '');
 
   // An explicit request supersedes everything in flight; an automatic one
-  // only older automatic ones (main.js aborts the same set).
+  // only older automatic ones (main.js aborts the same set). CALM rule for
+  // early starts: an early answer that owns the panel and has been on screen
+  // for EarlyStart.SWAP_WINDOW_MS is spared (it finishes; this one waits
+  // behind the chip); before that it is simply replaced.
+  const supersedeAt = performance.now();
+  let spare;
   for (const r of suggestRequests.values()) {
     if (!auto || r.auto) {
+      if (auto && r.early && EarlyStart.keepEarlyOnScreen({ ownsPanel: panelOwnerId === r.id, shownAt: r.shownAt, now: supersedeAt })) {
+        spare = r.id;
+        continue;
+      }
       r.superseded = true;
       suggestRequests.delete(r.id);
       if (panelOwnerId === r.id) panelOwnerId = null;
@@ -2479,9 +2691,11 @@ async function requestSuggestion(instruction, opts = {}) {
   const req = {
     id, kind: 'suggest', auto, questionLine, buffer: '', headline: '', fullShown: false,
     started: false, frameQueued: false, superseded: false,
-    answerStyle: currentAnswerStyle(), latencyFrom: latencyStartFor(), firstTokenAt: null,
+    answerStyle: currentAnswerStyle(), latencyFrom: opts.latencyFrom || latencyStartFor(), firstTokenAt: null,
     useHeadline: instantHeadlineEnabled(), sentAt: null, firstHeadlineAt: null, firstAnswerAt: null, timing: null,
+    trigger: auto ? opts.trigger || null : null, early: auto && !!opts.early, shownAt: null,
   };
+  if (req.early) opts.early.reqId = id;
   req.onChunk = () => {
     if (panelOwnerId !== id) {
       // Buffered behind the visible answer: nothing on screen changes, but
@@ -2516,6 +2730,7 @@ async function requestSuggestion(instruction, opts = {}) {
       headline: req.useHeadline,
       intent: intentInfo.intent,
       intentConfidence: intentInfo.confidence,
+      spare,
     };
     req.sentAt = performance.now();
     const result = await api.generateSuggestion(payload);
@@ -2555,6 +2770,7 @@ async function requestSuggestion(instruction, opts = {}) {
     else showPendingAnswer(answer);
   } catch (err) {
     dropPendingStream(req);
+    if (req.early && !req.superseded) opts.early.failed = true; // the final line then asks again
     if (req.superseded || err.code === 'ABORTED') return;
     if (panelOwnerId === id) {
       if (req.started) restorePanel();

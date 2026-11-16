@@ -78,7 +78,7 @@ test('auth uses the Token scheme in a header', () => {
 // ---- parsing ----
 test('parseMessage normalizes Results, UtteranceEnd, SpeechStarted and ignores junk', () => {
   const r = dg.parseMessage(results(' Hello there ', { isFinal: true, speechFinal: true, start: 1.5, duration: 0.5 }));
-  assert.deepEqual(r, { type: 'results', text: 'Hello there', isFinal: true, speechFinal: true, fromFinalize: false, start: 1.5, end: 2 });
+  assert.deepEqual(r, { type: 'results', text: 'Hello there', isFinal: true, speechFinal: true, fromFinalize: false, confidence: 0.98, start: 1.5, end: 2 });
   assert.deepEqual(dg.parseMessage(Buffer.from(utteranceEnd(3.2))), { type: 'utterance-end', lastWordEnd: 3.2 });
   assert.deepEqual(dg.parseMessage(JSON.stringify({ type: 'SpeechStarted', channel: [0], timestamp: 0 })), { type: 'speech-started' });
   assert.equal(dg.parseMessage(JSON.stringify({ type: 'Metadata', request_id: 'x' })).type, 'metadata');
@@ -99,11 +99,11 @@ test('interim guesses replace each other, speech_final makes one final line (end
     results('biggest weakness?', { isFinal: true, speechFinal: true, start: 1.2, duration: 1 }),
   ]);
   assert.deepEqual(out, [
-    { kind: 'interim', text: 'what' },
-    { kind: 'interim', text: 'what is' },
-    { kind: 'interim', text: 'What is your' },
-    { kind: 'interim', text: 'What is your biggest' },
-    { kind: 'final', text: 'What is your biggest weakness?', endOfSpeech: true },
+    { kind: 'interim', text: 'what', confidence: 0.98 },
+    { kind: 'interim', text: 'what is', confidence: 0.98 },
+    { kind: 'interim', text: 'What is your', confidence: 0.98 },
+    { kind: 'interim', text: 'What is your biggest', confidence: 0.98 },
+    { kind: 'final', text: 'What is your biggest weakness?', endOfSpeech: true, reason: 'speech_final' },
   ]);
   assert.equal(a.hasPending(), false);
 });
@@ -115,13 +115,13 @@ test('UtteranceEnd finalizes settled text when no speech_final came (noisy room)
     results('a project', { isFinal: true, start: 1, duration: 1 }),
     utteranceEnd(),
   ]);
-  assert.deepEqual(out.at(-1), { kind: 'final', text: 'Tell me about a project', endOfSpeech: true });
+  assert.deepEqual(out.at(-1), { kind: 'final', text: 'Tell me about a project', endOfSpeech: true, reason: 'utterance_end' });
 });
 
 test('UtteranceEnd right after speech_final is ignored (no duplicate signal)', () => {
   const a = dg.createUtteranceAssembler();
   const out = run(a, [results('Hi.', { isFinal: true, speechFinal: true }), utteranceEnd()]);
-  assert.deepEqual(out, [{ kind: 'final', text: 'Hi.', endOfSpeech: true }]);
+  assert.deepEqual(out, [{ kind: 'final', text: 'Hi.', endOfSpeech: true, reason: 'speech_final' }]);
 });
 
 test('after speech_final, a trailing empty final / Finalize flush / UtteranceEnd add nothing (one trigger)', () => {
@@ -132,7 +132,7 @@ test('after speech_final, a trailing empty final / Finalize flush / UtteranceEnd
     results('', { isFinal: true, fromFinalize: true, start: 1.6, duration: 0.1 }),
     utteranceEnd(),
   ]);
-  assert.deepEqual(out, [{ kind: 'final', text: 'What is a hash map?', endOfSpeech: true }]);
+  assert.deepEqual(out, [{ kind: 'final', text: 'What is a hash map?', endOfSpeech: true, reason: 'speech_final' }]);
 });
 
 test('non-stop talking is cut into lines (endOfSpeech false), then UtteranceEnd signals the end', () => {
@@ -143,20 +143,20 @@ test('non-stop talking is cut into lines (endOfSpeech false), then UtteranceEnd 
     utteranceEnd(),
   ]);
   assert.deepEqual(out, [
-    { kind: 'interim', text: 'one two three' },
-    { kind: 'final', text: 'one two three four five six', endOfSpeech: false },
-    { kind: 'end-of-speech' },
+    { kind: 'interim', text: 'one two three', confidence: 0.98 },
+    { kind: 'final', text: 'one two three four five six', endOfSpeech: false, reason: 'max' },
+    { kind: 'end-of-speech', reason: 'utterance_end' },
   ]);
 });
 
 test('a Finalize flush (from_finalize) ends the utterance; empty finals clear a stale guess', () => {
   const a = dg.createUtteranceAssembler();
   assert.deepEqual(run(a, [results('so yeah', { isFinal: true, fromFinalize: true })]), [
-    { kind: 'final', text: 'so yeah', endOfSpeech: true },
+    { kind: 'final', text: 'so yeah', endOfSpeech: true, reason: 'finalize' },
   ]);
   const b = dg.createUtteranceAssembler();
   assert.deepEqual(run(b, [results('uh'), results('', { isFinal: true })]), [
-    { kind: 'interim', text: 'uh' },
+    { kind: 'interim', text: 'uh', confidence: 0.98 },
     { kind: 'interim', text: '' },
   ]);
 });
@@ -164,7 +164,7 @@ test('a Finalize flush (from_finalize) ends the utterance; empty finals clear a 
 test('flush() turns settled text into a final line (stream closing)', () => {
   const a = dg.createUtteranceAssembler();
   run(a, [results('almost done', { isFinal: true })]);
-  assert.deepEqual(a.flush(), [{ kind: 'final', text: 'almost done', endOfSpeech: true }]);
+  assert.deepEqual(a.flush(), [{ kind: 'final', text: 'almost done', endOfSpeech: true, reason: 'close' }]);
   assert.deepEqual(a.flush(), []);
 });
 

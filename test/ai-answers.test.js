@@ -231,6 +231,20 @@ test('request registry: explicit supersedes all suggestions, auto only older aut
   assert.equal(reg.has('e2'), false);
 });
 
+test('request registry: an automatic request can spare one early-start answer; explicit ignores spare', () => {
+  const reg = createRequestRegistry();
+  const early = reg.start('suggest', 'early', 'auto');
+  const other = reg.start('suggest', 'other', 'auto');
+  assert.ok(early.signal.aborted, 'without spare, a newer auto cancels the older one');
+  const early2 = reg.start('suggest', 'early2', 'auto');
+  assert.ok(other.signal.aborted);
+  const restart = reg.start('suggest', 'restart', 'auto', { spare: 'early2' });
+  assert.ok(!early2.signal.aborted, 'the spared early answer keeps streaming');
+  assert.ok(!restart.signal.aborted);
+  reg.start('suggest', 'e1', 'explicit', { spare: 'early2' });
+  assert.ok(early2.signal.aborted && restart.signal.aborted, 'explicit still cancels everything');
+});
+
 // ---- Thinking level policy ----
 test('thinking level: Auto by mode + question, Fast = low, Max = high', () => {
   const lvl = (mode, question, extra = {}) => ai.resolveThinkingLevel({ mode, question, quality: 'auto', ...extra });

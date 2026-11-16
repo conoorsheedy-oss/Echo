@@ -889,8 +889,11 @@ function validateIntent(intent) {
 // boolean; anything else means off.
 // intent: the renderer's intent label (re-checked here, recomputed if
 // missing). A skipped automatic request resolves { skipped: true, reason }.
-handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images, headline, intent } = {}) => {
+handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images, headline, intent, spare } = {}) => {
   const id = validateRequestId(requestId);
+  // An early-start answer still on screen that this automatic request must
+  // not abort (renderer.js CALM rule; ai-requests.js).
+  const spareId = validateRequestId(spare);
   assertOptionalString(transcript, 'transcript', MAX_TRANSCRIPT_CHARS);
   const safeMode = validateMode(mode);
   assertOptionalString(instruction, 'instruction', 4000);
@@ -902,7 +905,7 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
   // Privacy Mode: never send screenshots, even if the renderer still had some.
   const preparedImages = privacyModeEnabled ? undefined : prepareImages(images);
 
-  const req = aiRequests.start('suggest', id, requestKind);
+  const req = aiRequests.start('suggest', id, requestKind, { spare: spareId });
   try {
     // Ingest the transcript, link the question to its thread and build the
     // knowledge query (synchronous, no API calls). Interview follow-ups also

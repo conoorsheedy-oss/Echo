@@ -2,6 +2,12 @@
 
 ## 0.2.0 – unreleased
 
+- **Early start on Deepgram interim text.** When Deepgram's end-of-speech signal (`speech_final`) doesn't fire -- seen with an AI interviewer's voice played through system audio -- the answer used to wait for the ~1 s `UtteranceEnd` fallback (about 1.5 s from speech end to request). Now, in Deepgram mode, once the interviewer's in-progress line reads like a complete question that needs an answer and no new words have arrived for 350 ms, the automatic answer starts from that text.
+  - When the final line arrives with the same words (punctuation, "um", a trailing "okay?" don't count), the answer already in flight is kept: no second request. If they kept talking or the words changed, the corrected question is asked instead and replaces the early answer -- unless that answer has been on screen for 1.5 s, in which case it finishes and the corrected one waits behind **New answer ready**.
+  - Only for the other side's speech and automatic answers; never in Privacy Mode or with Groq Whisper. Interim text is still never added to the transcript Gemini sees.
+  - An early answer is attached to its question's thread once the line lands (interview session), so follow-ups still find its code and CV snippets.
+  - Diagnostics > **Last answer timing** now starts with what released the answer: `trigger: speech_final`, `utterance_end`, `early_interim` (with `kept` / `restarted`), `groq_vad` or `other`, plus how long after the last audio that signal came.
+
 - **Faster first word.**
   - Deepgram now calls the end of speech after a 200 ms pause (was 300 ms), so automatic answers start ~0.1 s sooner. `utterance_end_ms=1000` stays as the fallback. Override with `DEEPGRAM_ENDPOINTING_MS` (100-1000).
   - The instant first line now uses the newest stable Gemini **Flash-Lite** your key can use, found once per run from Gemini's model list (no `-preview` / `-exp` / dated ids). The lookup never delays a request: until it finishes, or if there's no stable Flash-Lite, the first line uses `GEMINI_MODEL` as before. A first-line model that 404s is dropped for the run; one that refuses `minimal` thinking is retried at `low`, then without thinking. Set `GEMINI_HEADLINE_MODEL` to choose it yourself. Full answers, chat and summaries still use `GEMINI_MODEL`, and the first line gets the same prompt and context as before.

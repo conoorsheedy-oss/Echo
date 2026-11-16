@@ -882,6 +882,7 @@ function ingestLine(s, raw, lineIndex) {
       labelInterviewerStatement(s, item, thread, true);
       if (q.link.relation === 'new') thread.questionIds.push(q.id);
       else thread.followUpIds.push(q.id);
+      adoptPendingSuggestions(s, q);
       s.lastLine = { speaker, itemId: item.id, questionRecordId: q.id, endsMidThought: Question.endsMidThought(text) };
       return;
     }
@@ -1099,6 +1100,7 @@ function recordSuggestion(s, { requestId, threadId, questionId, question, text, 
   const record = {
     itemId: sugItem.id, requestId: ref, questionId: q ? q.id : null, threadId: tid,
     afterLine: Number.isFinite(afterLine) ? afterLine : s.lineOffset + s.seenLines.length, detailIds: [],
+    codeItemId: null,
   };
   for (const d of extractDetails(body, knowledge)) {
     const di = addItem(s, {
@@ -1115,25 +1117,15 @@ function recordSuggestion(s, { requestId, threadId, questionId, question, text, 
       source: { kind: 'suggestion', ref }, status: 'suggested', detail: { kind: 'code', key: 'code' }, parentId: sugItem.id, confirmedBy: null,
     });
     record.detailIds.push(ci.id);
-    if (thread) {
-      const prev = thread.code && s.itemById.get(thread.code);
-      if (prev) {
-        prev.status = 'superseded';
-        s.threadCache.delete(thread.id);
-      }
-      thread.code = ci.id;
-    }
+    record.codeItemId = ci.id;
   }
-  if (thread) {
-    for (const k of knowledge) {
-      if (thread.knowledgeSources.some((x) => x.source === k.source && x.index === k.index)) continue;
-      const ki = addItem(s, {
-        type: 'candidate_statement', text: k.text, threadId: tid, questionId: record.questionId,
-        source: { kind: 'knowledge', ref: k.source }, status: 'stated', chunkIndex: k.index,
-        labels: [label('knowledge_snippet', 1, 'knowledge-search')],
-      });
-      thread.knowledgeSources.push({ source: k.source, index: k.index, itemId: ki.id, requestId: ref });
-    }
+  if (thread) attachSuggestionToThread(s, record, thread, knowledge);
+  if (!q && question) {
+    // An early-start answer (renderer.js) is asked for before its question's
+    // line reaches the transcript: link it when that line arrives
+    // (adoptPendingSuggestions).
+    record.pendingNorm = normKey(question);
+    record.pendingKnowledge = thread ? [] : knowledge;
   }
   s.suggestions.push(record);
   // Candidate lines already spoken after the request may confirm details now.
@@ -1144,6 +1136,59 @@ function recordSuggestion(s, { requestId, threadId, questionId, question, text, 
   }
   rebuildThreads(s);
   return sugItem.id;
+}
+
+// The suggestion's code becomes the thread's current code; its knowledge
+// snippets become the thread's knowledge sources.
+function attachSuggestionToThread(s, record, thread, knowledge) {
+  if (record.codeItemId) {
+    const prev = thread.code && s.itemById.get(thread.code);
+    if (prev && prev.id !== record.codeItemId) {
+      prev.status = 'superseded';
+      s.threadCache.delete(thread.id);
+    }
+    thread.code = record.codeItemId;
+  }
+  for (const k of knowledge || []) {
+    if (thread.knowledgeSources.some((x) => x.source === k.source && x.index === k.index)) continue;
+    const ki = addItem(s, {
+      type: 'candidate_statement', text: k.text, threadId: thread.id, questionId: record.questionId,
+      source: { kind: 'knowledge', ref: k.source }, status: 'stated', chunkIndex: k.index,
+      labels: [label('knowledge_snippet', 1, 'knowledge-search')],
+    });
+    thread.knowledgeSources.push({ source: k.source, index: k.index, itemId: ki.id, requestId: record.requestId });
+  }
+}
+
+// A question line just opened q: a suggestion recorded for it before the
+// line arrived (early start) joins q -- and q's thread, if the request's own
+// link decision had none (a new topic), so follow-ups find its code /
+// knowledge and the candidate's next lines can confirm its details. One
+// that was already linked to a different thread stays there. Matched on the
+// question text, like findQuestion().
+function adoptPendingSuggestions(s, q) {
+  const thread = threadById(s, q.threadId);
+  if (!thread) return;
+  for (const rec of s.suggestions) {
+    const n = rec.pendingNorm;
+    if (!n || rec.questionId || rec.afterLine > q.lineIndex) continue;
+    if (!(q.norm === n || n.includes(q.norm) || q.norm.includes(n))) continue;
+    const knowledge = rec.pendingKnowledge;
+    delete rec.pendingNorm;
+    delete rec.pendingKnowledge;
+    if (rec.threadId && rec.threadId !== thread.id) continue;
+    const attach = !rec.threadId;
+    rec.questionId = q.id;
+    rec.threadId = thread.id;
+    for (const id of [rec.itemId, ...rec.detailIds]) {
+      const it = s.itemById.get(id);
+      if (it) {
+        it.questionId = q.id;
+        it.threadId = thread.id;
+      }
+    }
+    if (attach) attachSuggestionToThread(s, rec, thread, knowledge);
+  }
 }
 
 // ---- Transcript ingestion ----

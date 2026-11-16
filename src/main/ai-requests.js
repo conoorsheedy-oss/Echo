@@ -5,7 +5,8 @@
 //   - a new *explicit* suggestion (Generate / hotkey / gesture / Regenerate /
 //     Shorten / Expand) aborts every suggestion still in flight;
 //   - a new *automatic* suggestion aborts only older automatic ones, so it
-//     never kills an answer the user asked for.
+//     never kills an answer the user asked for -- except `spare`, an early
+//     -start answer the renderer is still showing (renderer.js, CALM rule).
 // Chat ('ask') requests don't supersede anything; they can be cancelled by id.
 'use strict';
 
@@ -13,10 +14,13 @@ function createRequestRegistry() {
   const inflight = new Map(); // id -> { controller, channel, kind }
   let anonSeq = 0;
 
-  function start(channel, requestId, kind) {
+  // opts.spare: an automatic request's id that a new automatic one leaves
+  // running (ignored for explicit requests, which supersede everything).
+  function start(channel, requestId, kind, { spare } = {}) {
     const requestKind = kind === 'auto' ? 'auto' : 'explicit';
     if (channel === 'suggest') {
-      for (const entry of inflight.values()) {
+      for (const [entryId, entry] of inflight.entries()) {
+        if (requestKind === 'auto' && spare && entryId === spare) continue;
         if (entry.channel === 'suggest' && (requestKind === 'explicit' || entry.kind === 'auto')) {
           entry.controller.abort();
         }

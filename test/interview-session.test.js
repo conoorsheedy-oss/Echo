@@ -390,6 +390,44 @@ test('a question split across two "Them" lines is one question', () => {
   assert.equal(iv.ctx(joined).question.id, iv.session.questions[0].id);
 });
 
+test('early start: a question answered before its line reaches the transcript makes no thread of its own, then joins the real one', () => {
+  const iv = interview();
+  iv.say('Them: Thanks for joining today.');
+  iv.say('You: Happy to be here.');
+  const question = 'Write a function to reverse a linked list.';
+  // renderer.js early start: the request carries the provisional question,
+  // the transcript only the finished lines (never the interim text).
+  const plan = S.planKnowledgeSearch(iv.session, { transcript: iv.text(), question, mode: 'interview' });
+  assert.equal(plan.threadId, null, 'no thread yet: the link decision is virtual');
+  assert.equal(iv.session.threads.length, 0);
+  assert.equal(iv.session.questions.length, 0);
+  S.recordSuggestion(iv.session, {
+    requestId: 'early1', question, afterLine: plan.afterLine, generation: plan.generation,
+    text: 'Walk the list once, flipping each next pointer.\n\n```python\ndef reverse(head):\n    prev = None\n    while head:\n        head.next, prev, head = prev, head, head.next\n    return prev\n```',
+  });
+  assert.equal(iv.session.threads.length, 0, 'recording the answer creates no thread');
+
+  // The final line lands (same words; Deepgram punctuated it the same way).
+  iv.say(`Them: ${question}`);
+  assert.equal(iv.session.threads.length, 1, 'exactly one thread, no duplicate');
+  assert.equal(iv.session.questions.length, 1);
+  const thread = iv.session.threads[0];
+  const rec = iv.session.suggestions.find((x) => x.requestId === 'early1');
+  assert.equal(rec.questionId, iv.session.questions[0].id);
+  assert.equal(rec.threadId, thread.id);
+  assert.equal(thread.code, rec.codeItemId, "the early answer's code is the thread's code");
+  assert.equal(iv.session.itemById.get(rec.itemId).threadId, thread.id);
+
+  // A follow-up links to that thread and sees the code.
+  iv.say('You: I would walk it once and flip the pointers.');
+  const follow = "What's the time complexity of your code?";
+  iv.say(`Them: ${follow}`);
+  const ctx = iv.ctx(follow);
+  assert.equal(ctx.link.relation, 'follow_up');
+  assert.equal(ctx.currentThread.id, thread.id);
+  assert.equal(iv.session.threads.length, 1);
+});
+
 // ---- 8. schema ----
 
 test('every stored item has the required fields with a valid type, status and source', () => {

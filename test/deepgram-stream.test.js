@@ -240,9 +240,9 @@ test('Results / UtteranceEnd become interim + final transcript events for that s
   ws.serverMessage(res('design it?', { is_final: true, speech_final: true }));
   ws.serverMessage({ type: 'UtteranceEnd', last_word_end: 2 });
   assert.deepEqual(ctx.events, [
-    { speaker: 'Them', kind: 'interim', text: 'how would' },
-    { speaker: 'Them', kind: 'interim', text: 'How would you' },
-    { speaker: 'Them', kind: 'final', text: 'How would you design it?', endOfSpeech: true },
+    { speaker: 'Them', kind: 'interim', text: 'how would', confidence: null },
+    { speaker: 'Them', kind: 'interim', text: 'How would you', confidence: null },
+    { speaker: 'Them', kind: 'final', text: 'How would you design it?', endOfSpeech: true, reason: 'speech_final' },
   ]);
 });
 
@@ -256,8 +256,8 @@ test('stop sends CloseStream, takes the last finals, and resolves when Deepgram 
   ws.serverClose(1000);
   await stopped;
   assert.deepEqual(ctx.events, [
-    { speaker: 'Them', kind: 'interim', text: 'last words' },
-    { speaker: 'Them', kind: 'final', text: 'last words', endOfSpeech: true },
+    { speaker: 'Them', kind: 'interim', text: 'last words', confidence: null },
+    { speaker: 'Them', kind: 'final', text: 'last words', endOfSpeech: true, reason: 'close' },
     { speaker: 'Them', kind: 'status', state: 'closed' },
   ]);
   assert.deepEqual(ctx.mgr.activeSpeakers(), []);

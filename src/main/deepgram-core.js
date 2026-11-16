@@ -97,6 +97,7 @@ function parseMessage(raw) {
     case 'Results': {
       const alt = obj.channel && Array.isArray(obj.channel.alternatives) ? obj.channel.alternatives[0] : null;
       const text = alt && typeof alt.transcript === 'string' ? alt.transcript.trim() : '';
+      const confidence = alt && Number.isFinite(alt.confidence) ? alt.confidence : null;
       const start = Number.isFinite(obj.start) ? obj.start : 0;
       const duration = Number.isFinite(obj.duration) ? obj.duration : 0;
       return {
@@ -105,6 +106,7 @@ function parseMessage(raw) {
         isFinal: obj.is_final === true,
         speechFinal: obj.speech_final === true,
         fromFinalize: obj.from_finalize === true,
+        confidence,
         start,
         end: start + duration,
       };
@@ -135,10 +137,17 @@ function joinText(a, b) {
 //   speech_final     ...and an endpoint was detected: the speaker paused
 //   UtteranceEnd     a word-timing gap: also "they stopped" (backup signal)
 // The assembler keeps the settled pieces of the current utterance and emits:
-//   { kind: 'interim', text }                      settled pieces + latest guess
-//   { kind: 'final', text, endOfSpeech: boolean }  one finished line
-//   { kind: 'end-of-speech' }                      they stopped, but the line
+//   { kind: 'interim', text, confidence }          settled pieces + latest guess
+//                                                  (confidence of the latest piece, or null)
+//   { kind: 'final', text, endOfSpeech: boolean, reason }  one finished line
+//   { kind: 'end-of-speech', reason }              they stopped, but the line
 //                                                  was already finalized earlier
+// reason = which signal ended it (Diagnostics > Last answer timing):
+//   'speech_final'   Deepgram's endpointing pause
+//   'utterance_end'  the UtteranceEnd word-timing gap (backup, ~1 s)
+//   'finalize'       the Finalize flush main sends when audio stops
+//   'max'            the MAX_UTTERANCE_MS length cut (endOfSpeech: false)
+//   'close'          the stream closing
 function createUtteranceAssembler({ maxUtteranceMs = MAX_UTTERANCE_MS } = {}) {
   let settled = ''; // is_final pieces of the utterance in progress
   let utteranceStart = null; // seconds (Deepgram stream time)
@@ -147,7 +156,7 @@ function createUtteranceAssembler({ maxUtteranceMs = MAX_UTTERANCE_MS } = {}) {
   // UtteranceEnd still means "they stopped".
   let pendingEndOfSpeech = false;
 
-  function finalize(endOfSpeech) {
+  function finalize(endOfSpeech, reason) {
     const text = settled.trim();
     const hadInterim = !!lastInterim;
     settled = '';
@@ -157,38 +166,40 @@ function createUtteranceAssembler({ maxUtteranceMs = MAX_UTTERANCE_MS } = {}) {
       // e.g. speech_final on an empty result right after a length cut.
       if (endOfSpeech && pendingEndOfSpeech) {
         pendingEndOfSpeech = false;
-        return [{ kind: 'end-of-speech' }];
+        return [{ kind: 'end-of-speech', reason }];
       }
       return hadInterim ? [{ kind: 'interim', text: '' }] : [];
     }
     pendingEndOfSpeech = !endOfSpeech;
-    return [{ kind: 'final', text, endOfSpeech }];
+    return [{ kind: 'final', text, endOfSpeech, reason }];
   }
 
   function push(msg) {
     if (!msg) return [];
     if (msg.type === 'utterance-end') {
-      if (settled.trim()) return finalize(true);
+      if (settled.trim()) return finalize(true, 'utterance_end');
       if (pendingEndOfSpeech) {
         pendingEndOfSpeech = false;
-        return [{ kind: 'end-of-speech' }];
+        return [{ kind: 'end-of-speech', reason: 'utterance_end' }];
       }
       return []; // already finalized by speech_final -- nothing new
     }
     if (msg.type !== 'results') return [];
 
     if (msg.text && utteranceStart === null) utteranceStart = msg.start;
+    const confidence = Number.isFinite(msg.confidence) ? msg.confidence : null;
     if (!msg.isFinal) {
       const text = joinText(settled, msg.text);
       if (!text || text === lastInterim) return [];
       lastInterim = text;
-      return [{ kind: 'interim', text }];
+      return [{ kind: 'interim', text, confidence }];
     }
 
     settled = joinText(settled, msg.text);
     // An endpoint, or the flush we asked for when audio stopped (Finalize).
-    if (msg.speechFinal || msg.fromFinalize) return finalize(true);
-    if (utteranceStart !== null && (msg.end - utteranceStart) * 1000 >= maxUtteranceMs) return finalize(false);
+    if (msg.speechFinal) return finalize(true, 'speech_final');
+    if (msg.fromFinalize) return finalize(true, 'finalize');
+    if (utteranceStart !== null && (msg.end - utteranceStart) * 1000 >= maxUtteranceMs) return finalize(false, 'max');
     if (!settled) {
       // The guess on screen turned out to be nothing (noise): clear it.
       if (!lastInterim) return [];
@@ -197,12 +208,12 @@ function createUtteranceAssembler({ maxUtteranceMs = MAX_UTTERANCE_MS } = {}) {
     }
     if (settled === lastInterim) return [];
     lastInterim = settled;
-    return [{ kind: 'interim', text: settled }];
+    return [{ kind: 'interim', text: settled, confidence }];
   }
 
   // Stream closing: whatever is settled becomes a final line.
   function flush() {
-    return finalize(true);
+    return finalize(true, 'close');
   }
 
   return { push, flush, hasPending: () => !!settled.trim() };
