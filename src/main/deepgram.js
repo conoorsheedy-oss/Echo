@@ -43,7 +43,7 @@ function defaultWebSocket() {
 }
 
 // deps (all optional, for tests): WebSocket, getKey, now, setTimeout,
-// clearTimeout, setInterval, clearInterval, model, language, log.
+// clearTimeout, setInterval, clearInterval, model, language, endpointingMs, log.
 function createDeepgramManager(deps = {}) {
   const WS = deps.WebSocket || defaultWebSocket();
   const getKey = deps.getKey || (() => '');
@@ -60,6 +60,9 @@ function createDeepgramManager(deps = {}) {
   }
   function language() {
     return core.cleanLanguage(typeof deps.language === 'function' ? deps.language() : deps.language || process.env.DEEPGRAM_LANGUAGE);
+  }
+  function endpointingMs() {
+    return core.cleanEndpointing(deps.endpointingMs != null ? deps.endpointingMs : process.env.DEEPGRAM_ENDPOINTING_MS);
   }
 
   function createSession(speaker, emit) {
@@ -145,7 +148,7 @@ function createDeepgramManager(deps = {}) {
 
       let ws;
       try {
-        ws = new WS(core.buildListenUrl({ model: model(), language: language() }), {
+        ws = new WS(core.buildListenUrl({ model: model(), language: language(), endpointingMs: endpointingMs() }), {
           headers: core.authHeaders(key),
           handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
           perMessageDeflate: false,

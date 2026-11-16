@@ -145,6 +145,25 @@ test('connects with the Token header (never in the URL) and resolves once open',
   assert.deepEqual(ctx.events.at(-1), { speaker: 'You', kind: 'status', state: 'open' });
 });
 
+test('listen URL uses DEEPGRAM_ENDPOINTING_MS when set (clamped), else 200 ms', async () => {
+  const prev = process.env.DEEPGRAM_ENDPOINTING_MS;
+  try {
+    delete process.env.DEEPGRAM_ENDPOINTING_MS;
+    let ctx = setup();
+    ctx.mgr.start('You', ctx.emit).catch(() => {});
+    await tick();
+    assert.equal(new URL(ctx.last().url).searchParams.get('endpointing'), '200');
+    process.env.DEEPGRAM_ENDPOINTING_MS = '50';
+    ctx = setup();
+    ctx.mgr.start('Them', ctx.emit).catch(() => {});
+    await tick();
+    assert.equal(new URL(ctx.last().url).searchParams.get('endpointing'), '100');
+  } finally {
+    if (prev === undefined) delete process.env.DEEPGRAM_ENDPOINTING_MS;
+    else process.env.DEEPGRAM_ENDPOINTING_MS = prev;
+  }
+});
+
 test('one socket per speaker', async () => {
   const ctx = setup();
   const you = await openStream(ctx, 'You');

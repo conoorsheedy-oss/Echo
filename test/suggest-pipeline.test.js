@@ -13,6 +13,11 @@ const keyStore = require('../src/main/keyStore');
 keyStore.getKey = (provider) => (provider === 'gemini' ? 'test-gemini-key' : 'test-groq-key');
 const ai = require('../src/main/ai');
 const { runSuggestion } = require('../src/main/suggest-pipeline');
+// These tests are about the pipeline, not the first-line model lookup
+// (test/headline-model.test.js): no Flash-Lite, so the first line uses
+// GEMINI_MODEL and no extra models-list request is made.
+delete process.env.GEMINI_HEADLINE_MODEL;
+ai._resetHeadlineModel({ status: 'done', model: null });
 
 const encoder = new TextEncoder();
 const realFetch = global.fetch;

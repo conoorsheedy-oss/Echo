@@ -150,15 +150,17 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 
 ### How Echo keeps answers fast
 
-- **End of speech**: with Deepgram, a question is answered the moment Deepgram reports the speaker has stopped (`speech_final`, about 0.3 s after the last word). With Groq, audio is cut 0.55 s after someone stops and a question is answered 150 ms after it's transcribed. Questions are recognised by their wording ("what's the complexity", "walk me through your code", "write a function...") even without a question mark; a line that trails off ("and the...") waits up to 1.5 s for the rest.
-- **First line first**: the instant first line usually lands well before the full answer, which may still be thinking.
+- **End of speech**: with Deepgram, a question is answered the moment Deepgram reports the speaker has stopped (`speech_final`, about 0.2 s after the last word; `DEEPGRAM_ENDPOINTING_MS` changes that pause). With Groq, audio is cut 0.55 s after someone stops and a question is answered 150 ms after it's transcribed. Questions are recognised by their wording ("what's the complexity", "walk me through your code", "write a function...") even without a question mark; a line that trails off ("and the...") waits up to 1.5 s for the rest.
+- **First line first**: the instant first line usually lands well before the full answer, which may still be thinking. It's written by the newest stable Gemini **Flash-Lite** your key can use, found once per run from Gemini's model list (until that lookup finishes, and if there's none, it uses `GEMINI_MODEL`); full answers always use `GEMINI_MODEL`.
 - **Thinking only where it pays**: `high` thinking is kept for new problems; follow-ups and everything else use `low`.
 - **Prompt order**: the long, growing transcript goes first and the question last, so Gemini can reuse ("implicitly cache") the unchanged start of the prompt between questions.
 - `Ctrl+Shift+D` shows the split for the last answer: end of speech → request sent → first line → first word of the full answer.
 - **Models** (when running from source): copy `.env.example` to `.env` to override them, then restart Echo:
   - `GEMINI_MODEL` (default `gemini-3.5-flash`). Google retires older Flash models, so if answers say the model is unknown, set a current Gemini Flash id from Google AI Studio.
+  - `GEMINI_HEADLINE_MODEL` (default: unset = pick the newest stable Flash-Lite automatically): the model for the instant first line only. If it's unknown to your key, Echo uses `GEMINI_MODEL` for the first line instead. `Ctrl+Shift+D` > Models shows which one is in use.
   - `GROQ_STT_MODEL` (default `whisper-large-v3-turbo`).
   - `DEEPGRAM_MODEL` (default `nova-3`) and `DEEPGRAM_LANGUAGE` (default `en`; `multi` for Nova-3 multilingual).
+  - `DEEPGRAM_ENDPOINTING_MS` (default `200`, allowed `100`-`1000`): how long a pause Deepgram waits for before it calls the end of speech. Lower answers sooner; raise it (e.g. `300`) if questions get cut at a breath.
 - `.env` can also hold `GROQ_API_KEY` / `GEMINI_API_KEY` / `DEEPGRAM_API_KEY` as a developer fallback. Keys saved in the app take priority.
 
 ## Privacy

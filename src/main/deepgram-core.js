@@ -19,9 +19,14 @@ const DEFAULT_DEEPGRAM_LANGUAGE = 'en';
 // Audio format the renderer sends (src/renderer/pcm-core.js): 16 kHz mono
 // signed 16-bit little-endian PCM, ~100 ms per frame.
 const SAMPLE_RATE = 16000;
-// Deepgram finalizes ("speech_final") after this much silence. 300 ms is
-// snappy without splitting most sentences at a breath.
-const ENDPOINTING_MS = 300;
+// Deepgram finalizes ("speech_final") after this much silence. 200 ms gets
+// the answer started sooner. If a question is split at a breath, the second
+// half arrives as a new line: the renderer asks again with both lines joined
+// (recentThemQuestion), and that automatic request supersedes the first.
+// Override with DEEPGRAM_ENDPOINTING_MS (clamped to 100-1000).
+const ENDPOINTING_MS = 200;
+const MIN_ENDPOINTING_MS = 100;
+const MAX_ENDPOINTING_MS = 1000;
 // Backup end-of-speech signal based on word timings, robust to background
 // noise that keeps endpointing from firing. 1000 ms is Deepgram's minimum.
 const UTTERANCE_END_MS = 1000;
@@ -50,13 +55,20 @@ function cleanLanguage(language) {
   return /^(?:multi|[a-z]{2,3}(?:-[A-Za-z0-9]{2,4})?)$/.test(l) ? l : DEFAULT_DEEPGRAM_LANGUAGE;
 }
 
+// DEEPGRAM_ENDPOINTING_MS -> an integer in [100, 1000]; blank/garbage -> 200.
+function cleanEndpointing(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!/^\d{1,6}$/.test(raw)) return ENDPOINTING_MS;
+  return Math.min(MAX_ENDPOINTING_MS, Math.max(MIN_ENDPOINTING_MS, Number(raw)));
+}
+
 function buildListenUrl({ model, language, sampleRate = SAMPLE_RATE, endpointingMs = ENDPOINTING_MS } = {}) {
   const params = new URLSearchParams({
     model: cleanModel(model),
     language: cleanLanguage(language),
     smart_format: 'true',
     interim_results: 'true',
-    endpointing: String(endpointingMs),
+    endpointing: String(cleanEndpointing(endpointingMs)),
     utterance_end_ms: String(UTTERANCE_END_MS),
     vad_events: 'true',
     encoding: 'linear16',
@@ -290,6 +302,8 @@ module.exports = {
   DEFAULT_DEEPGRAM_MODEL,
   SAMPLE_RATE,
   ENDPOINTING_MS,
+  MIN_ENDPOINTING_MS,
+  MAX_ENDPOINTING_MS,
   UTTERANCE_END_MS,
   MAX_UTTERANCE_MS,
   KEEPALIVE_MS,
@@ -299,6 +313,7 @@ module.exports = {
   CONTROL,
   cleanModel,
   cleanLanguage,
+  cleanEndpointing,
   buildListenUrl,
   authHeaders,
   parseMessage,

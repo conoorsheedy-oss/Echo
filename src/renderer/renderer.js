@@ -434,12 +434,18 @@ function syncContentProtectionUI(enabled) {
   contentProtectionBadge.classList.toggle('hidden', !enabled);
 }
 
+// The first-line model is looked up after the first answer request, so the
+// diagnostics panel re-reads this when it opens.
+async function refreshModelsText() {
+  const { groqModel, geminiModel, headlineModel, deepgramModel } = await api.getConfigStatus();
+  modelsText = `${groqModel || '?'} / ${deepgramModel || '?'} (speech-to-text), ${geminiModel || '?'} (answers), ${headlineModel || geminiModel || '?'} (first line)`;
+  modelNote.textContent = `Answers use ${geminiModel || 'the default Gemini model'}. Google retires older Flash models over time -- to use a newer Gemini Flash model, set GEMINI_MODEL in your .env file and restart Echo.`;
+}
+
 async function init() {
   syncListeningUI();
   try {
-    const { groqModel, geminiModel, deepgramModel } = await api.getConfigStatus();
-    modelsText = `${groqModel || '?'} / ${deepgramModel || '?'} (speech-to-text), ${geminiModel || '?'} (answers)`;
-    modelNote.textContent = `Answers use ${geminiModel || 'the default Gemini model'}. Google retires older Flash models over time -- to use a newer Gemini Flash model, set GEMINI_MODEL in your .env file and restart Echo.`;
+    await refreshModelsText();
   } catch (e) { /* diagnostics only */ }
   try {
     const { enabled: privacyOn } = await api.getPrivacyStatus();
@@ -1549,7 +1555,7 @@ api.onSttEvent((ev) => {
       // endOfSpeech = Deepgram heard the pause (speech_final / UtteranceEnd):
       // to the auto-suggest logic that's the same as a VAD cut at a pause,
       // except a question fires straight away (live: no extra wait -- the
-      // 300 ms endpointing pause already happened).
+      // endpointing pause, 200 ms by default, already happened).
       appendLine(speaker, text, {
         cut: ev.endOfSpeech ? 'silence' : 'max',
         live: !!ev.endOfSpeech,
@@ -2831,6 +2837,9 @@ function toggleDiagnostics() {
   if (opening) {
     exitCompact();
     renderDiagnostics();
+    refreshModelsText()
+      .then(() => { if (!diagnosticsOverlay.classList.contains('hidden')) renderDiagnostics(); })
+      .catch(() => { /* diagnostics only */ });
   }
   diagnosticsOverlay.classList.toggle('hidden', !opening);
 }

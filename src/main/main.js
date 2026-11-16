@@ -1141,6 +1141,8 @@ handle('screen:capture', async (_evt, { sourceId } = {}) => {
 handle('config:status', async () => ({
   groqModel: ai.groqModel(),
   geminiModel: ai.geminiModel(),
+  // The model the next instant first line uses (doesn't start the lookup).
+  headlineModel: ai.headlineModel({ discover: false }),
   deepgramModel: deepgram.model(),
   deepgramLanguage: deepgram.language(),
 }));

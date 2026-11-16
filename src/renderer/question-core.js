@@ -12,7 +12,7 @@
 // Delay after a line lands (renderer.js appendLine):
 //   LIVE_QUESTION_DELAY_MS (0)    Deepgram heard the end of speech (speech_final /
 //                                 UtteranceEnd / flush) on a question: the
-//                                 300 ms endpointing pause already happened.
+//                                 endpointing pause (200 ms) already happened.
 //   QUESTION_DELAY_MS (150)       a question cut at a pause (Groq VAD path).
 //   AFTER_SPEECH_MS (300)         any other finished sentence (. ! ?) at a pause.
 //   QUIET_MS (1500)               trailing off ("...", "so the", "and um,"), a

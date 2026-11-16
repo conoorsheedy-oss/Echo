@@ -47,6 +47,20 @@ test('listen URL has nova-3, linear16 16 kHz mono, interim results, endpointing 
   assert.equal(p.has('token'), false, 'the key never goes in the URL');
 });
 
+test('endpointing defaults to 200 ms; overrides are clamped to 100-1000', () => {
+  assert.equal(dg.ENDPOINTING_MS, 200);
+  assert.equal(new URL(dg.buildListenUrl()).searchParams.get('endpointing'), '200');
+  assert.equal(new URL(dg.buildListenUrl({ endpointingMs: 350 })).searchParams.get('endpointing'), '350');
+  assert.equal(new URL(dg.buildListenUrl({ endpointingMs: 10 })).searchParams.get('endpointing'), '100');
+  assert.equal(dg.cleanEndpointing('5000'), 1000);
+  assert.equal(dg.cleanEndpointing(' 250 '), 250);
+  for (const bad of [undefined, null, '', 'fast', '-50', '1e3', '200ms', 12.5]) {
+    assert.equal(dg.cleanEndpointing(bad), 200, `bad value ${bad}`);
+  }
+  // The UtteranceEnd fallback is unchanged.
+  assert.equal(new URL(dg.buildListenUrl({ endpointingMs: 100 })).searchParams.get('utterance_end_ms'), '1000');
+});
+
 test('model / language overrides are sanitised', () => {
   const ok = new URL(dg.buildListenUrl({ model: 'nova-3-medical', language: 'multi' })).searchParams;
   assert.equal(ok.get('model'), 'nova-3-medical');
@@ -108,6 +122,17 @@ test('UtteranceEnd right after speech_final is ignored (no duplicate signal)', (
   const a = dg.createUtteranceAssembler();
   const out = run(a, [results('Hi.', { isFinal: true, speechFinal: true }), utteranceEnd()]);
   assert.deepEqual(out, [{ kind: 'final', text: 'Hi.', endOfSpeech: true }]);
+});
+
+test('after speech_final, a trailing empty final / Finalize flush / UtteranceEnd add nothing (one trigger)', () => {
+  const a = dg.createUtteranceAssembler();
+  const out = run(a, [
+    results('What is a hash map?', { isFinal: true, speechFinal: true, start: 0, duration: 1.4 }),
+    results('', { isFinal: true, speechFinal: true, start: 1.4, duration: 0.2 }),
+    results('', { isFinal: true, fromFinalize: true, start: 1.6, duration: 0.1 }),
+    utteranceEnd(),
+  ]);
+  assert.deepEqual(out, [{ kind: 'final', text: 'What is a hash map?', endOfSpeech: true }]);
 });
 
 test('non-stop talking is cut into lines (endOfSpeech false), then UtteranceEnd signals the end', () => {

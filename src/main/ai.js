@@ -723,18 +723,28 @@ function answerTokensFor(kind, instruction) {
 }
 
 // ---- Per-session adaptive state ----
-// thinkingRejected: the model 400'd on thinkingConfig once -> stop sending it.
-// minimalRejected: the model only refused the 'minimal' level (some models
-// don't have it) -> use 'low' for those requests instead, and keep thinking
-// control for everything else.
+// Per model (the first line can use a different model from the answers, see
+// headlineModel(), so one model's quirks never change the other's requests):
+//   thinkingRejected: the model 400'd on thinkingConfig -> stop sending it.
+//   minimalRejected: the model only refused the 'minimal' level (some models
+//   don't have it) -> use 'low' for those requests instead, and keep thinking
+//   control for everything else.
 // streamFailures: consecutive broken streams -> after a couple, stop trying
 // to stream for this run (e.g. a proxy that buffers SSE).
-const session = { thinkingRejected: false, minimalRejected: false, streamFailures: 0 };
+const session = { thinking: new Map(), streamFailures: 0 };
 const STREAM_DISABLE_AFTER_FAILURES = 2;
 
+function thinkingState(model) {
+  let state = session.thinking.get(model);
+  if (!state) {
+    state = { thinkingRejected: false, minimalRejected: false };
+    session.thinking.set(model, state);
+  }
+  return state;
+}
+
 function resetSessionState() {
-  session.thinkingRejected = false;
-  session.minimalRejected = false;
+  session.thinking.clear();
   session.streamFailures = 0;
 }
 
@@ -757,19 +767,22 @@ function looksLikeThinkingRejection(info) {
   return /thinking/i.test(`${info.message} ${info.raw}`);
 }
 
-// POSTs to models/<model>:<endpoint>. If the model rejects thinkingConfig
-// (HTTP 400 that mentions "thinking"), retries once without it and
-// remembers that for the rest of the session.
+// POSTs to models/<model>:<endpoint> (req.model, else GEMINI_MODEL). If the
+// model rejects thinkingConfig (HTTP 400 that mentions "thinking"), retries
+// without it -- or, if only 'minimal' was refused, at 'low' first -- and
+// remembers that for this model for the rest of the session.
 async function postGemini(endpoint, req) {
   const apiKey = keyStore.getKey('gemini');
   if (!apiKey) throw missingKeyError('gemini');
-  const model = safeModelName(geminiModel());
+  const model = safeModelName(req.model || geminiModel());
   const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:${endpoint}`;
+  const quirks = thinkingState(model);
   let withThinking =
-    !!req.thinkingLevel && THINKING_LEVELS.has(req.thinkingLevel) && supportsThinkingLevel(model) && !session.thinkingRejected;
-  let level = req.thinkingLevel === 'minimal' && session.minimalRejected ? 'low' : req.thinkingLevel;
+    !!req.thinkingLevel && THINKING_LEVELS.has(req.thinkingLevel) && supportsThinkingLevel(model) && !quirks.thinkingRejected;
+  let level = req.thinkingLevel === 'minimal' && quirks.minimalRejected ? 'low' : req.thinkingLevel;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // minimal -> low -> no thinkingConfig: at most three tries.
+  for (let attempt = 0; attempt < 3; attempt++) {
     let res;
     try {
       res = await fetch(url, {
@@ -789,18 +802,18 @@ async function postGemini(endpoint, req) {
     if (res.ok) return res;
 
     const info = await readProviderError(res);
-    if (res.status === 400 && withThinking && attempt === 0 && looksLikeThinkingRejection(info)) {
+    if (res.status === 400 && withThinking && looksLikeThinkingRejection(info)) {
       if (level === 'minimal') {
         // Only this level is unsupported: don't give up thinking control
         // for the full answers too.
-        session.minimalRejected = true;
+        quirks.minimalRejected = true;
         level = 'low';
-        console.warn('[ai] Gemini rejected thinkingLevel "minimal" for this model -- using "low" for those requests.');
+        console.warn(`[ai] Gemini rejected thinkingLevel "minimal" for ${model} -- using "low" for those requests.`);
         continue;
       }
-      session.thinkingRejected = true;
+      quirks.thinkingRejected = true;
       withThinking = false;
-      console.warn('[ai] Gemini rejected thinkingConfig for this model -- retrying without it for the rest of this session.');
+      console.warn(`[ai] Gemini rejected thinkingConfig for ${model} -- retrying without it for the rest of this session.`);
       continue;
     }
     throw httpError('gemini', res, info);
@@ -1184,6 +1197,129 @@ function firstSpokenSentence(text) {
   return (m ? m[1] : t).replace(/["'”’]+$/, '').trim();
 }
 
+// ---- Which model writes the first line ----
+// Only the first line changes model; full answers, chat and summaries always
+// use GEMINI_MODEL. In order:
+//   1. GEMINI_HEADLINE_MODEL in .env, if set.
+//   2. The newest STABLE Gemini Flash-Lite this key can use, looked up once
+//      per app run from Gemini's model list (models/gemini-<version>-flash-lite
+//      that supports generateContent; no -preview / -exp / dated ids).
+//      The lookup starts at the first headline request and never delays it:
+//      until it has finished, that request uses GEMINI_MODEL.
+//   3. GEMINI_MODEL (no stable Flash-Lite, the lookup failed, or the chosen
+//      model 404'd -- then it's skipped for the rest of the run).
+// A failed lookup is retried after HEADLINE_DISCOVERY_RETRY_MS.
+const FLASH_LITE_NAME_RE = /^models\/gemini-(\d+(?:\.\d+)?)-flash-lite$/;
+const HEADLINE_DISCOVERY_RETRY_MS = 10 * 60_000;
+const HEADLINE_DISCOVERY_MAX_PAGES = 10;
+const MODEL_ID_RE = /^[A-Za-z0-9._-]{1,100}$/;
+
+const headlineDiscovery = { status: 'idle', model: null, failedAt: 0, promise: null }; // status: idle | pending | done | failed
+const badHeadlineModels = new Set(); // 404'd as the first-line model this run
+
+function compareVersions(a, b) {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] || 0) - (b[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+// Gemini's models list -> 'gemini-<newest version>-flash-lite', or null.
+function pickHeadlineModel(models) {
+  let best = null;
+  let bestVersion = null;
+  for (const m of Array.isArray(models) ? models : []) {
+    const match = m && typeof m.name === 'string' ? FLASH_LITE_NAME_RE.exec(m.name) : null;
+    if (!match) continue;
+    if (!Array.isArray(m.supportedGenerationMethods) || !m.supportedGenerationMethods.includes('generateContent')) continue;
+    const version = match[1].split('.').map(Number);
+    if (!best || compareVersions(version, bestVersion) > 0) {
+      best = m.name.slice('models/'.length);
+      bestVersion = version;
+    }
+  }
+  return best;
+}
+
+// GET /models (every page). Same key header, timeout and error mapping as
+// the other Gemini calls; the key never goes in the URL.
+async function listGeminiModels(apiKey) {
+  const models = [];
+  let pageToken = '';
+  for (let page = 0; page < HEADLINE_DISCOVERY_MAX_PAGES; page++) {
+    const query = new URLSearchParams({ pageSize: '1000' });
+    if (pageToken) query.set('pageToken', pageToken);
+    let res;
+    try {
+      res = await fetch(`${GEMINI_API_BASE}/models?${query.toString()}`, {
+        headers: { 'x-goog-api-key': apiKey },
+        signal: AbortSignal.timeout(KEY_TEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      throw networkError('gemini', err);
+    }
+    if (!res.ok) throw httpError('gemini', res, await readProviderError(res));
+    let data;
+    try {
+      data = await res.json();
+    } catch (err) {
+      throw aiError('PROVIDER_ERROR', 'Gemini sent back a model list Echo could not read.');
+    }
+    if (data && Array.isArray(data.models)) models.push(...data.models);
+    pageToken = data && typeof data.nextPageToken === 'string' ? data.nextPageToken : '';
+    if (!pageToken) break;
+  }
+  return models;
+}
+
+// Starts the lookup if it hasn't run (or failed long enough ago). Never
+// throws, never awaited by a headline request.
+function discoverHeadlineModel() {
+  const d = headlineDiscovery;
+  if (d.status === 'pending' || d.status === 'done') return d.promise;
+  if (d.status === 'failed' && Date.now() - d.failedAt < HEADLINE_DISCOVERY_RETRY_MS) return d.promise;
+  const apiKey = keyStore.getKey('gemini');
+  if (!apiKey) return null; // the request itself reports the missing key
+  d.status = 'pending';
+  d.promise = listGeminiModels(apiKey).then(
+    (models) => {
+      d.model = pickHeadlineModel(models);
+      d.status = 'done';
+      console.warn(d.model
+        ? `[ai] First line will use ${d.model} (newest stable Flash-Lite).`
+        : `[ai] No stable Gemini Flash-Lite model for this key -- the first line uses ${geminiModel()}.`);
+    },
+    (err) => {
+      d.model = null;
+      d.status = 'failed';
+      d.failedAt = Date.now();
+      console.warn(`[ai] Couldn't look up a Flash-Lite model for the first line (${(err && err.code) || 'error'}) -- using ${geminiModel()} for now.`);
+    }
+  );
+  return d.promise;
+}
+
+// The model the next first line uses. discover=false: just report it
+// (diagnostics), without starting the lookup.
+function headlineModel({ discover = true } = {}) {
+  const main = geminiModel();
+  const override = (process.env.GEMINI_HEADLINE_MODEL || '').trim().replace(/^models\//, '');
+  if (override) return MODEL_ID_RE.test(override) && !badHeadlineModels.has(override) ? override : main;
+  if (discover) discoverHeadlineModel();
+  const d = headlineDiscovery;
+  return d.status === 'done' && d.model && !badHeadlineModels.has(d.model) ? d.model : main;
+}
+
+// Tests only: reset (or preset) the lookup state.
+function resetHeadlineModel({ status = 'idle', model = null } = {}) {
+  headlineDiscovery.status = status;
+  headlineDiscovery.model = model;
+  headlineDiscovery.failedAt = 0;
+  headlineDiscovery.promise = null;
+  badHeadlineModels.clear();
+}
+
 async function generateHeadline(params) {
   const {
     transcript, instruction, question, previousAnswers, images, knowledgeSnippets, signal, onChunk,
@@ -1191,7 +1327,9 @@ async function generateHeadline(params) {
   const named = String(question || '').trim();
   const { mode, questionKind: kind, intent, allowNoResponse } = suggestionAnalysis(params);
   const filter = typeof onChunk === 'function' ? createStreamHumanizer() : null;
-  const result = await callGemini({
+  const model = headlineModel();
+  // Same prompt, context, intent and kind whichever model writes it.
+  const req = {
     systemPrompt: buildHeadlineSystemPrompt(mode),
     parts: buildUserParts(buildHeadlineConversation({
       transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse,
@@ -1209,7 +1347,20 @@ async function generateHeadline(params) {
         if (out) onChunk(out);
       }
       : undefined,
-  });
+  };
+  let result;
+  try {
+    result = await callGemini({ ...req, model });
+  } catch (err) {
+    // The first-line model is unknown to this key (retired, or a typo in
+    // GEMINI_HEADLINE_MODEL): skip it for the rest of the run and use the
+    // answer model. A 404 comes back before any text, so nothing was shown.
+    const main = geminiModel();
+    if (err.code !== 'MODEL_NOT_FOUND' || model === main || (signal && signal.aborted)) throw err;
+    badHeadlineModels.add(model);
+    console.warn(`[ai] First-line model ${model} isn't available -- using ${main} for the first line from now on.`);
+    result = await callGemini({ ...req, model: main });
+  }
   if (filter) {
     const rest = filter.end(); // e.g. a short reply the opener check was still holding
     if (rest) onChunk(rest);
@@ -1333,6 +1484,9 @@ module.exports = {
   testOne,
   groqModel,
   geminiModel,
+  headlineModel,
+  pickHeadlineModel,
+  discoverHeadlineModel,
   // Pure helpers, exported for main.js validation and the unit tests.
   QUALITY_SETTINGS,
   ANSWER_STYLES,
@@ -1361,4 +1515,5 @@ module.exports = {
   THINKING_HEADROOM_TOKENS,
   createSseParser,
   _resetSessionState: resetSessionState,
+  _resetHeadlineModel: resetHeadlineModel,
 };

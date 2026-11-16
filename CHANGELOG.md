@@ -2,6 +2,12 @@
 
 ## 0.2.0 – unreleased
 
+- **Faster first word.**
+  - Deepgram now calls the end of speech after a 200 ms pause (was 300 ms), so automatic answers start ~0.1 s sooner. `utterance_end_ms=1000` stays as the fallback. Override with `DEEPGRAM_ENDPOINTING_MS` (100-1000).
+  - The instant first line now uses the newest stable Gemini **Flash-Lite** your key can use, found once per run from Gemini's model list (no `-preview` / `-exp` / dated ids). The lookup never delays a request: until it finishes, or if there's no stable Flash-Lite, the first line uses `GEMINI_MODEL` as before. A first-line model that 404s is dropped for the run; one that refuses `minimal` thinking is retried at `low`, then without thinking. Set `GEMINI_HEADLINE_MODEL` to choose it yourself. Full answers, chat and summaries still use `GEMINI_MODEL`, and the first line gets the same prompt and context as before.
+  - Thinking-level quirks are now remembered per model, so the first-line model refusing a level never changes the full answers' requests.
+  - Diagnostics > Models shows the first-line model.
+
 - **Interview session state (Phase 2a).** Echo now keeps track of the interview itself, in memory only (never saved; cleared on Stop, Clear transcript and quit), in a new pure module `src/main/interview-session.js`.
   - **Question threads**: every interviewer question is linked as a **new** topic or a **follow-up** of an earlier one, with a confidence and the reasons. Explicit transitions ("let's move on", "next question") start a new thread; "why a hash map?", "what's the space complexity?", "what was the outcome?", "what would you do differently?" stay with their thread; "going back to your two-sum solution" / "earlier you mentioned the payments project" find the older thread. An unclear one ("walk me through that" right after a topic change) is kept **provisional** with both readings and settled by what comes next (usually your own answer).
   - **Sources kept apart**: every stored item says who said it (interviewer, you, an Echo suggestion, your knowledge files, or a rule) and its status (stated, suggested, confirmed, inferred, superseded). Constraints, interviewer facts and your experience claims are labels on the verbatim lines.
