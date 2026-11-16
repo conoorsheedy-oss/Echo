@@ -58,7 +58,7 @@ The window has three parts: a slim **top bar**, the **answer card** (most of the
 **Top bar**
 
 - **Start / Stop** records your mic and system audio. With Groq (default), speech is sent at natural pauses (about half a second after someone stops talking), and silence is never uploaded. With **Deepgram**, words appear live. The dot next to the name is green while listening, and Stop pulses red.
-- **Mode** (the dropdown): Interview, Meeting, Presentation, General. Each has its own answer style.
+- **Mode** (the dropdown): Interview, Meeting, Presentation, General. Each has its own answer style and its own idea of what needs an answer: Interview answers questions; Meeting also helps when someone pushes back on you, proposes something, raises a blocker or asks for ideas, and stays quiet for updates and small talk (it may also decide there's nothing worth adding and show nothing).
 - **`⋯` menu**: API keys & settings, keyboard shortcuts, Focus mode, hand gestures, Hide from screen share, Hide (keep running), Quit Echo.
 - **Closing:** the **×** button quits Echo completely. To tuck it away but keep it running, use **⋯ → Hide (keep running)** or `Ctrl+Shift+Space`. Opening Echo again while it's running just brings the existing window back.
 - **Compact bar** (the bar icon or `Ctrl+Shift+K`) shrinks Echo to just the latest answer; **×** hides Echo (`Ctrl+Shift+Space` brings it back).

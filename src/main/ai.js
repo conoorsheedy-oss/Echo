@@ -14,6 +14,11 @@
 const keyStore = require('./keyStore');
 const deepgramCore = require('./deepgram-core');
 const { humanizeAnswer, createStreamHumanizer } = require('./humanize');
+// Pure, shared with the renderer: intent detection, the technical-question
+// heuristics and the new-problem / follow-up classifier.
+const intentCore = require('../renderer/intent-core');
+
+const { looksTechnical, classifyQuestion, classifyIntent, NO_RESPONSE_SENTINEL } = intentCore;
 
 const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const GROQ_MODELS_URL = 'https://api.groq.com/openai/v1/models';
@@ -266,7 +271,7 @@ const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You"
 // Words and patterns that make an answer sound machine-written when said
 // out loud. humanize.js also strips em dashes and stock openers afterwards,
 // as a safety net.
-const BANNED_TELLS = `Never use these AI tells: "Great question", "Certainly", "Absolutely", "I'd be happy to", "leverage", "delve", "utilize", "passionate about", "spearheaded", "synergy", "robust", "seamless", "cutting-edge", "game-changer", "it's worth noting", "in summary", "in conclusion", "overall", "furthermore", "moreover", "additionally", "I'm excited to", "thrilled", "a testament to", "navigate", "foster", "holistic", "dive into", "key takeaway", "in today's fast-paced world", "Not only X but also Y" constructions, and neat lists of three adjectives ("fast, scalable and reliable"). Never use em dashes (—): use a comma or a full stop, or start a new sentence.`;
+const BANNED_TELLS = `Never use these AI tells: "Great question", "That's a great question", "Great point", "I completely agree", "Certainly", "Absolutely", "I'd be happy to", "leverage", "delve", "utilize", "passionate about", "spearheaded", "synergy", "robust", "seamless", "cutting-edge", "game-changer", "it's worth noting", "in summary", "in conclusion", "overall", "furthermore", "moreover", "additionally", "I'm excited to", "thrilled", "a testament to", "navigate", "foster", "holistic", "dive into", "key takeaway", "in today's fast-paced world", "Not only X but also Y" constructions, and neat lists of three adjectives ("fast, scalable and reliable"). Never use em dashes (—): use a comma or a full stop, or start a new sentence.`;
 
 // Highest-priority rule: sounding human must never mean making things up.
 const GROUNDING = `\nTRUTH FIRST (this overrides every style rule below): only state facts about the user (projects, jobs, schools, tools, numbers, results, stories) that appear in the transcript or in their background material. If a fact isn't there, don't guess: keep it general or use a short [placeholder] they can fill in. The tone examples below use made-up facts purely to show style; never reuse any of their details. For technical facts (APIs, complexities, definitions), say only what you're confident is correct; if unsure, say so in a few words rather than guessing.`;
@@ -277,6 +282,8 @@ const HUMAN_VOICE = `\nSound like a real person talking, not like an AI or a cov
 - Concrete beats polished: name the actual project, tool, number or result instead of a general claim, but ONLY ones that appear in the transcript or the user's background material. If there's no such fact, stay general or use a [placeholder]; never make one up.
 - Now and then (not in every answer) it's fine to open the way people really do: "So,", "Yeah, so", "Honestly,". Most answers should just start with the point.
 - Talk like a smart friend explaining something across a table, not like someone presenting slides. Answer what was actually asked; never repeat the question back.
+- Don't reflexively agree with or praise the other person's point ("Great point", "Totally agree" as a reflex). Agree only when the user actually would, and then say why in a few words.
+- Don't start with the other person's name or with "So basically".
 - Don't make it too tidy. Real answers aren't perfectly symmetrical: don't always give exactly three points, don't make every sentence the same shape, and don't wrap up with a neat moral ("That taught me the value of teamwork"). End on a concrete detail, or just stop.
 - People mention the messy part (what was hard, what went wrong first, what they'd do differently), but only when that detail is in the user's facts. Never invent a struggle, a failure or a lesson to sound real.
 - Say numbers the way people say them out loud: "about a third", "around 200 users", "a couple of weeks", not "33.7%" or "a 2-week period".
@@ -308,14 +315,14 @@ const ANSWER_STYLES = new Set(['script', 'cues']);
 const SCRIPT_STYLE = `\nAnswer style: SCRIPT. The user will say this out loud, glancing at it mid-conversation:
 - Start with ONE short headline sentence that directly answers the question, in the user's own voice, on its own line, followed by a blank line. It should work on its own if that's all they manage to say.
 - Then 1-3 more short spoken sentences, ONE sentence per line (a line break after every sentence). Nothing the user would stumble over saying. No menu of options.
-- When relevant, include a concrete result or outcome (a number, what changed, what it led to). For behavioural "tell me about a time" questions use a compressed STAR shape: the situation in a clause, what I did, and end on the result.
+- When relevant, include a concrete result or outcome (a number, what changed, what it led to).
 - Minimal formatting: plain sentences. No headings, no bullet lists, no tables, no LaTeX. You may **bold** one or two key words (never whole sentences).
 - Never invent projects, employers, numbers or experience that aren't in the transcript or the user's background material. If a detail is missing, keep it general.`;
 
 const CUES_STYLE = `\nAnswer style: CUES. The user wants prompts to talk around in their own words, not a script to read:
 - Line 1: ONE short headline sentence they can say straight away, directly answering the question, in their own voice. Then a blank line.
 - Then 3-4 cue lines. Each starts with "- " and a **bold keyword or short phrase** (2-4 words), optionally followed by a few plain words of detail (a number, a name, a result). Fragments only: no full sentences, no explanations, no filler.
-- Put the cues in the order the user should talk through them. For behavioural "tell me about a time" questions follow STAR (situation, what I did, result) and make the last cue the concrete result.
+- Put the cues in the order the user should talk through them.
 - No headings, no tables, no LaTeX, and nothing after the cues.
 - Never invent projects, employers, numbers or experience that aren't in the transcript or the user's background material. If a detail is missing, keep the cue general.
 Example of the format (facts made up, never reuse them):
@@ -338,9 +345,60 @@ function normalizeAnswerStyle(style) {
   return typeof style === 'string' && ANSWER_STYLES.has(style) ? style : 'script';
 }
 
-function commonNotes(answerStyle) {
-  const style = normalizeAnswerStyle(answerStyle) === 'cues' ? CUES_STYLE : SCRIPT_STYLE;
-  return `${GROUNDING}${HUMAN_VOICE}${style}${TECHNICAL_STYLE}${CONTEXT_NOTE}${SCREEN_NOTE}${KNOWLEDGE_NOTE}`;
+// ---- Mode-specific rules ----
+// One shared core (truth, voice + tone examples, answer style, context /
+// screen / knowledge notes) plus ONE block per mode. Per-request details
+// (the intent, auto vs asked-for) go in the LATEST section instead, so the
+// system prompt stays identical for every request in a (mode, style) pair
+// and Gemini's prefix caching keeps working.
+const MODES = intentCore.MODES; // interview | meeting | presentation | general
+
+function normalizeMode(mode) {
+  return intentCore.normalizeMode(mode);
+}
+
+// Automatic suggestions outside interviews may decline (suggest-pipeline.js
+// drops the request silently). Explicit requests never get this option.
+const NO_RESPONSE_NOTE = `\n- Automatic suggestions: only when the LATEST section says this suggestion was triggered automatically, and there is genuinely nothing useful for the user to say (small talk, an update that needs no reply, a remark aimed at someone else), reply with exactly ${NO_RESPONSE_SENTINEL} and nothing else. When the user asked for the answer themselves, always give a useful reply.`;
+
+const STAR_SCRIPT = '- For behavioural "tell me about a time" questions use a compressed STAR shape: the situation in a clause, what I did, and end on the result.';
+const STAR_CUES = '- For behavioural "tell me about a time" questions follow STAR (situation, what I did, result) and make the last cue the concrete result.';
+
+const MODE_NOTES = {
+  interview: (style) => `\nInterview rules:
+${style === 'cues' ? STAR_CUES : STAR_SCRIPT}
+- Questions about the user's own experience: use their real facts from the transcript or background; if there are none, use short [placeholders] (see TRUTH FIRST).${TECHNICAL_STYLE}`,
+  meeting: () => `\nMeeting rules. You're helping the user contribute to a group discussion, not answer an exam:
+- Say something worth saying: a clear position, a concrete suggestion, a useful next step, or a sharp question. Sometimes the best contribution is a good question, and then the first line is that question.
+- Asked for an opinion: take a clear position and give one reason. Honest hedging is fine ("I'd lean towards X, mainly because Y"); being vague is not.
+- Someone disagreed with the user: acknowledge their point briefly, then either hold the position with a reason, concede the part they're right about, or suggest a quick way to test it. Never automatically defensive, never automatically agreeing.
+- A proposal: respond constructively with one real benefit, one risk or useful question, or a way to improve it.
+- Asked for ideas: one or two concrete suggestions, not a long list.
+- Someone describes a problem or blocker: a useful next step, or a clarifying question.
+- Asked to clarify: restate the point simply, in different words.
+- Keep it short: 1-3 lines, plain and conversational, like talking to colleagues. Don't summarise the meeting back to them and don't restate what they just said.
+- Only go technical (code, numbers, a design) when the discussion is technical, and then give the complete thing. Don't turn it into an interview-style story unless someone asks about the user's past experience.${NO_RESPONSE_NOTE}`,
+  presentation: () => `\nPresentation rules:
+- Give short talking points the user can say aloud while presenting, not an essay.
+- An audience question: answer it directly in the first line, then one supporting point (a fact, example or number from their material). If it's outside what they know, say so honestly and offer to follow up.
+- If the user seems lost or asks to get back on track, give a one-line bridge back to their main point, then the next thing to say.
+- Technical questions: answer directly; include code or working only when it's asked for, and then complete.
+- No interview-style stories or answer shapes.${NO_RESPONSE_NOTE}`,
+  general: () => `\nConversation rules:
+- Reply the way a person naturally would: answer, explain, suggest, or ask a short follow-up question back, whichever fits.
+- Asked for an opinion: a clear position and one reason. If they push back, acknowledge it, then hold your view with a reason, concede part, or suggest how to check.
+- Code, a draft or a full explanation: give the complete thing.
+- No interview framing and no interview-style stories.${NO_RESPONSE_NOTE}`,
+};
+
+// The shared core around one mode block. The mode block sits where the
+// technical rules used to be (after the answer style, before the notes on
+// what the request carries).
+function commonNotes(answerStyle, mode = 'interview') {
+  const styleName = normalizeAnswerStyle(answerStyle);
+  const style = styleName === 'cues' ? CUES_STYLE : SCRIPT_STYLE;
+  const modeNotes = MODE_NOTES[normalizeMode(mode)](styleName);
+  return `${GROUNDING}${HUMAN_VOICE}${style}${modeNotes}${CONTEXT_NOTE}${SCREEN_NOTE}${KNOWLEDGE_NOTE}`;
 }
 
 const MODE_INTROS = {
@@ -393,10 +451,10 @@ const SUMMARY_SCHEMA = {
   required: ['summary', 'decisions', 'actionItems', 'unresolved'],
 };
 
+// Unknown modes (including "__proto__") fall back to general.
 function buildSystemPrompt(mode, answerStyle) {
-  // hasOwn: don't let e.g. "__proto__" resolve to an inherited property.
-  const intro = Object.prototype.hasOwnProperty.call(MODE_INTROS, mode) ? MODE_INTROS[mode] : MODE_INTROS.general;
-  return `${intro}${commonNotes(answerStyle)}`;
+  const m = normalizeMode(mode);
+  return `${MODE_INTROS[m]}${commonNotes(answerStyle, m)}`;
 }
 
 // ---- Conversation context (whole session, not a recent window) ----
@@ -492,6 +550,40 @@ const KIND_HINTS = {
   followup: 'Question type: a FOLLOW-UP about the solution or code already discussed (or a quick conceptual question). Keep it short and spoken: the headline sentence with the direct answer, then 1-3 short lines. No numbered walk-through and no full code again; at most one tiny code block with just the changed lines if the answer changes the code.',
 };
 
+// Interview mode keeps the KIND_HINTS above exactly as before. Other modes
+// get a one-line hint for the detected intent instead (the system prompt's
+// mode block explains each), plus a technical nudge for a new problem.
+const INTENT_HINTS = {
+  direct_question: 'Intent: a direct question. Answer it in the first line.',
+  opinion_request: "Intent: they want the user's opinion. Take a clear position and give one reason.",
+  follow_up: "Intent: a follow-up on what was just discussed. Build on it; don't repeat it.",
+  disagreement: 'Intent: disagreement, possibly with something the user said. Respond thoughtfully, not defensively: acknowledge it, then hold the position with a reason, concede part, or suggest a way to test it.',
+  proposal: 'Intent: a proposal. Respond constructively: a real benefit, a risk or useful question, or an improvement.',
+  suggestion_request: "Intent: they're asking for ideas. Give one or two concrete suggestions.",
+  clarification_request: 'Intent: they want clarification. Restate the point simply, in different words.',
+  problem: 'Intent: someone described a problem or blocker. Offer a useful next step or a clarifying question.',
+  information_sharing: "Intent: an update or statement with no direct ask. Only add something genuinely useful: a relevant point or question, not an acknowledgement.",
+  explanation_request: 'Intent: they want an explanation. Explain simply, key idea first.',
+  behavioural_question: "Intent: a question about the user's own experience. Ground it in their real facts, or use [placeholders].",
+  technical_question: 'Intent: a technical question. Give the direct answer first, then the code or working if it is needed, complete.',
+  no_response: 'Intent: nothing was really asked (a filler or an acknowledgement).',
+};
+const OTHER_MODE_PROBLEM_HINT = 'Question type: a technical problem to solve. Give the approach in the first line, then the complete code or final answer, then a line on complexity if it applies.';
+const AUTO_NO_RESPONSE_HINT = `This suggestion was triggered automatically (the user didn't ask for it). If there is genuinely nothing useful for the user to say here, reply with exactly ${NO_RESPONSE_SENTINEL} and nothing else.`;
+
+// The per-request format hints for LATEST (full answer).
+function latestHints({ mode, kind, intent, allowNoResponse }) {
+  const hints = [];
+  if (!mode || mode === 'interview') {
+    if (kind && KIND_HINTS[kind]) hints.push(KIND_HINTS[kind]);
+    return hints;
+  }
+  if (kind === 'problem') hints.push(OTHER_MODE_PROBLEM_HINT);
+  if (intent && Object.prototype.hasOwnProperty.call(INTENT_HINTS, intent)) hints.push(INTENT_HINTS[intent]);
+  if (allowNoResponse) hints.push(AUTO_NO_RESPONSE_HINT);
+  return hints;
+}
+
 // Layout, built for Gemini's implicit (prefix) caching and for "the question
 // is never buried":
 //   [system instruction]                       identical for every request in a mode/style
@@ -506,7 +598,9 @@ const KIND_HINTS = {
 // searched with the question itself, and the newest answer -- go after it;
 // putting them first would make the shared prefix stop at the system prompt.
 // Returns { context, latest } text; buildUserParts() puts images between them.
-function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind }) {
+// mode / intent / allowNoResponse: see latestHints() (no mode = the
+// interview hints, as before).
+function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse }) {
   const capped = capTranscript(transcript);
   let context = `FULL CONVERSATION SO FAR (chronological, oldest first; "You" = the user, "Them" = the other side):\n\n${capped || '(no transcript yet)'}`;
   context += buildPreviousAnswersBlock(previousAnswers);
@@ -519,7 +613,7 @@ function buildConversation({ transcript, previousAnswers, knowledgeSnippets, que
   else if (question) latest += `\n\nQuestion to answer now (asked by Them): "${question}"`;
   else latest += '\n\nAnswer whatever was most recently asked or said above.';
   if (instruction) latest += `\n\nAdditional instruction from the user: ${instruction}`;
-  if (kind && KIND_HINTS[kind]) latest += `\n\n${KIND_HINTS[kind]}`;
+  for (const hint of latestHints({ mode, kind, intent, allowNoResponse })) latest += `\n\n${hint}`;
   return { context, latest };
 }
 
@@ -570,107 +664,9 @@ function buildUserParts(conversation, images) {
 const THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high']);
 const QUALITY_SETTINGS = new Set(['auto', 'fast', 'max']);
 
-// Cheap keyword heuristic; deliberately avoids everyday words that show up
-// in behavioural questions ("what sort of", "solve a conflict", "salary
-// expectations", "on a scale of 1 to 10").
-const TECHNICAL_PATTERNS = [
-  /```/,
-  /\b(code|coding|program(ming)?|implement\w*|function|algorithms?|data structures?|time complexity|space complexity|big[- ]?o|leetcode|hacker ?rank)\b/i,
-  /\b(arrays?|linked ?lists?|binary (search|tree)s?|trees?|graphs?|heaps?|queues?|hash ?(map|table|set)s?|matrix|matrices|recursion|recursive|dynamic programming|memoi[sz]\w*|dfs|bfs|depth[- ]first|breadth[- ]first|two pointers?|sliding window|palindromes?|substrings?|subarrays?|anagrams?|fibonacci|(merge|quick|heap|bubble|insertion|topological) ?sort|sorting algorithms?)\b/i,
-  /\b(sql|regex|debug(ging)?|stack ?trace|exceptions?|compil(e|er|ation)|o\(n|o\(log|o\(1\))/i,
-  /\b(probabilit(y|ies)|expected value|odds of|dice|die rolls?|coin (flip|toss)\w*|random variables?|variance|standard deviation|bayes(ian)?|combinatorics|permutations?|combinations of|n choose k|choose \d)\b/i,
-  /\b(maths?|mathematical|equations?|integrals?|derivatives?|prove that|proof|calculate|estimate how many|how many ways|sum of (the|all)|prime numbers?)\b/i,
-  /\b(puzzles?|brain ?teasers?|riddles?|logic problems?)\b/i,
-  /\b(system design|design (a|an) (\w+ ){0,2}(system|service|app|api|platform|database|cache|url shortener|rate limiter|parking lot|scheduler|key[- ]value store|news ?feed|chat)|scalab\w+|at scale|load balanc\w*|caching|sharding|database schema|throughput|rate limit(er|ing)|microservices?|distributed systems?)\b/i,
-  /\d+\s*[*/^%]\s*\d+|\b\d{1,3}\s+[-+]\s+\d{1,3}\b|\bx\^\d|\bn\^2\b|\blog\s*n\b/i, // arithmetic, not year ranges
-];
-
-function looksTechnical(text) {
-  const t = String(text || '');
-  if (!t.trim()) return false;
-  return TECHNICAL_PATTERNS.some((re) => re.test(t));
-}
-
-// ---- New problem vs follow-up (classifyQuestion) ----
-// A request to solve / build something, phrased as an ask: at the start of
-// a sentence, or after "can you", "please", "let's", "how would you", ...
-const ASK_PREFIX = String.raw`(?:^|[.?!:;]\s+|\b(?:can|could|would|will) you\s+(?:please\s+)?|\bplease\s+|\b(?:now|so|okay|ok|alright|next|first|then),?\s+|\blet'?s\s+|\b(?:i'?d like|i want|i need) you to\s+|\bgo ahead and\s+|\btry (?:to\s+)?|\bhow (?:would|could|do|can|should) you\s+)`;
-const PROBLEM_VERBS = String.raw`(?:write|implement|code(?: up)?|build|create|design|architect|solve|find|return|count|compute|calculate|determine|check|detect|reverse|merge|sort|rotate|remove|validate|serialize|deserialize|flatten|traverse|invert|print|generate|convert|parse|estimate|prove|simulate|search|partition|schedule|model)`;
-
-// Enough on their own (the question reads like a problem statement even
-// when the technical keywords above miss it).
-const STRONG_PROBLEM_PATTERNS = [
-  /```/,
-  /\b(leetcode|hacker ?rank|coding (problem|question|challenge|exercise|task)|(next|following|first|second|another) (problem|exercise|coding question)|here'?s (a|the|your|another) (problem|puzzle|task|challenge|brain ?teaser|exercise)|here is (a|the|your|another) (problem|puzzle|task|challenge|brain ?teaser|exercise)|the (problem|task|challenge) is\b|your task is)\b/i,
-  /\b(brain ?teasers?|puzzles?|riddles?|logic problems?)\b/i,
-  /\b(probability (of|that)|expected (value|number)|odds (of|that)|in how many ways|how many (ways|different|possible|combinations)|estimate how many|prove that|n choose k)\b/i,
-  /\bgiven (a|an|two|three|the|some|n|k|\d+) (\w+ ){0,3}(arrays?|strings?|trees?|graphs?|matri(x|ces)|grids?|integers?|binary|linked lists?|sorted|unsorted|intervals?|nodes?|lists? of (numbers|integers|strings|words|intervals|points|pairs|meetings|prices|stock prices))\b/i,
-  /\b(minimum|maximum|fewest|shortest|longest|smallest|largest|kth|k-th) (number of|path|subarray|substring|subsequence|sum|product|distance|element|profit|depth|window)\b/i,
-];
-// Need a technical question to count (an ask + a solve verb).
-const WEAK_PROBLEM_PATTERNS = [
-  new RegExp(`${ASK_PREFIX}${PROBLEM_VERBS}\\b`, 'i'),
-];
-
-// About work that already exists (the user's code / solution / last answer).
-const FOLLOWUP_PATTERNS = [
-  /\bwhy (did|do|would|didn'?t|don'?t|wouldn'?t|have|are) you\b/i,
-  /\bwhy (not|use|is|are|does|this|that|a|an|the)\b/i,
-  /\bwhat (if|happens|would happen|about|changes|would change)\b/i,
-  /\bhow about\b/i,
-  /\bcomplexit(y|ies)\b|\bbig[- ]?o\b|\bruntime\b/i,
-  /\b(can|could|would) you (explain|walk|talk|go|run|take|tell|clarify|elaborate|justify)\b/i,
-  /\b(explain|walk me through|talk me through|take me through|go through|run me through)\s+(why|how|what|your|the|this|that|it|line|each)\b/i,
-  /\bhow (would|could|do|did|will|can) you (test|verify|debug|validate|check|handle|deal with|optimi[sz]e|improve|scale|extend|change|modify)\b|\btest cases?\b|\bunit tests?\b/i,
-  /\b(edge|corner) cases?\b/i,
-  /\b(can|could) you (optimi[sz]e|improve|speed|make it|do (it|this|that|better))\b|\bis there a (better|faster|more efficient|simpler|cleaner)\b|\bbetter (solution|approach|way)\b|\bany (way|optimi[sz]ations?)\b/i,
-  /\btrade-?offs?\b|\binstead of\b/i,
-  /\b(your|this|that|the above|the same) (code|solution|approach|function|implementation|algorithm|answer|loop|line|variable|data structure|recursion|query|design|method|class)\b/i,
-  /\byou (used|wrote|chose|picked|did|said|mentioned|called|added|have|use|wrote)\b/i,
-  /\b(does|would|will|can) (it|this|that|your \w+)\b.{0,40}\b(work|handle|scale|break|fail|overflow|terminate|still)\b/i,
-];
-// The question OPENS like a follow-up: then it is one even if it also says
-// "find" or "return" ("what if we need to return all pairs?").
-const FOLLOWUP_OPENER_RE = /^(?:(?:so|ok(?:ay)?|and|right|cool|great|nice|alright|got it|thanks|sure|interesting|hmm|um|uh|yeah|now)[,.]?\s+)*(?:why|what if|what happens|what would happen|what about|how about|what'?s the (?:time|space|runtime|big)|what is the (?:time|space|runtime|big)|how (?:would|could|do|did|will) you (?:test|handle|deal|verify|debug|optimi[sz]e|improve|scale|extend|change)|(?:can|could) you (?:explain|walk|talk|tell|optimi[sz]e|improve|clarify)|is there|are there|any (?:edge|corner|other|better)|does (?:it|this|that|your)|would (?:it|this|that|your)|will (?:it|this|that|your)|walk me through (?:your|the|this|that|it)|talk me through (?:your|the|this|that|it)|explain (?:your|the|this|that|why|how))\b/i;
-// Plain words that, after a technical answer, still point at the code.
-const CODE_REFERENCE_RE = /\b(inputs?|outputs?|returns?|pairs?|elements?|values?|null|empty|duplicates?|negative|overflow|memory|loops?|index|indices|(your|the|this|that)( current)? (code|solution|approach|function|implementation|algorithm|method))\b/i;
-const FOLLOWUP_MAX_WORDS = 25; // a short question that references earlier work
-const LONG_PROBLEM_WORDS = 40; // a long technical prompt reads as a problem statement
-
-function wordCount(text) {
-  const m = String(text || '').trim().match(/\S+/g);
-  return m ? m.length : 0;
-}
-
-// 'problem'  -- a NEW problem to solve (full walk-through, high thinking in interviews)
-// 'followup' -- a technical follow-up / conceptual question (short answer, low thinking)
-// 'general'  -- everything else (behavioural, small talk, meetings)
-// opts.hasImages: screenshots are attached; opts.hasPriorAnswer: answers
-// were already given this session; opts.priorCode: a recent answer was a
-// technical one (so plain-word follow-ups like "what if the input is empty?"
-// are about that code).
-function classifyQuestion(text, { hasImages = false, hasPriorAnswer = false, priorCode = false } = {}) {
-  const t = String(text || '').trim();
-  const technical = looksTechnical(t);
-  const words = wordCount(t);
-  const strong = STRONG_PROBLEM_PATTERNS.some((re) => re.test(t));
-  const problem = strong || (technical && WEAK_PROBLEM_PATTERNS.some((re) => re.test(t)));
-  const followup = FOLLOWUP_PATTERNS.some((re) => re.test(t));
-  const opener = FOLLOWUP_OPENER_RE.test(t);
-  const clearFollowUp = followup && words < FOLLOWUP_MAX_WORDS && (opener || !problem);
-
-  // Screenshots usually show a problem -- unless this is plainly a short
-  // follow-up to an answer already given (e.g. "Keep screenshots" is on).
-  if (hasImages) return clearFollowUp && hasPriorAnswer && !strong ? 'followup' : 'problem';
-  if (!technical && !problem) {
-    return followup && priorCode && words < LONG_PROBLEM_WORDS && CODE_REFERENCE_RE.test(t) ? 'followup' : 'general';
-  }
-  if (clearFollowUp) return 'followup';
-  if (problem) return 'problem';
-  if (followup) return 'followup'; // long, but about the existing code
-  if (words >= LONG_PROBLEM_WORDS) return 'problem';
-  return 'followup'; // short technical question with no task in it: conceptual
-}
+// looksTechnical() and classifyQuestion() ('problem' | 'followup' |
+// 'general') live in src/renderer/intent-core.js, shared with the renderer's
+// intent layer; see the import at the top of this file.
 
 // What classifyQuestion() needs to know about the answers given so far.
 function priorContext(previousAnswers) {
@@ -1009,17 +1005,84 @@ function humanizeResult(result) {
   return { ...result, text: humanizeAnswer(result.text) };
 }
 
-async function generateSuggestion({
-  transcript, mode, instruction, question, previousAnswers, images, knowledgeSnippets, quality, answerStyle, signal, onChunk,
-}) {
+// How many "Them" lines since the user last spoke (this transcript has no
+// timestamps, so only the line count is known).
+function recentYouFromTranscript(transcript) {
+  const lines = String(transcript || '').trim().split('\n').filter((l) => l.trim());
+  let themLinesSince = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^You:/.test(lines[i])) return { themLinesSince };
+    if (/^Them:/.test(lines[i])) themLinesSince += 1;
+  }
+  return null;
+}
+
+// Worked out ONCE per suggestion (suggest-pipeline.js) and passed to both
+// the full answer and the instant first line, so they read the question the
+// same way:
+//   questionKind     classifyQuestion(): problem | followup | general
+//   intent           the renderer's intent if it sent a valid one, else
+//                    classifyIntent() on the same text
+//   allowNoResponse  an automatic request outside interviews: the model may
+//                    answer with the NO_RESPONSE sentinel
+function analyzeSuggestion({ transcript, mode, question, previousAnswers, images, intent, requestKind } = {}) {
+  const m = normalizeMode(mode);
   const named = String(question || '').trim();
   const latest = named || latestUtterance(transcript);
   const hasImages = !!(images && images.length);
-  const kind = classifyQuestion(latest, { hasImages, ...priorContext(previousAnswers) });
+  const prior = priorContext(previousAnswers);
+  const questionKind = classifyQuestion(latest, { hasImages, ...prior });
+  let finalIntent = intentCore.isIntent(intent) ? intent : null;
+  if (!finalIntent) {
+    finalIntent = classifyIntent(latest, {
+      mode: m,
+      speaker: 'them',
+      prior: { hasPriorAnswer: prior.hasPriorAnswer, lastAnswerTechnical: prior.priorCode },
+      recentYou: recentYouFromTranscript(transcript),
+      hasImages,
+    }).intent;
+  }
+  return {
+    mode: m,
+    questionKind,
+    intent: finalIntent,
+    allowNoResponse: requestKind === 'auto' && m !== 'interview',
+  };
+}
+
+// The analysis fields above, or worked out here when the caller (a test,
+// or anything other than suggest-pipeline.js) didn't pass them.
+function suggestionAnalysis(params) {
+  const mode = normalizeMode(params.mode);
+  if (params.questionKind && intentCore.isIntent(params.intent) && typeof params.allowNoResponse === 'boolean') {
+    return {
+      mode,
+      questionKind: params.questionKind,
+      intent: params.intent,
+      allowNoResponse: params.allowNoResponse && mode !== 'interview',
+    };
+  }
+  const fresh = analyzeSuggestion(params);
+  return {
+    mode: fresh.mode,
+    questionKind: params.questionKind || fresh.questionKind,
+    intent: intentCore.isIntent(params.intent) ? params.intent : fresh.intent,
+    allowNoResponse: typeof params.allowNoResponse === 'boolean' ? params.allowNoResponse && fresh.mode !== 'interview' : fresh.allowNoResponse,
+  };
+}
+
+async function generateSuggestion(params) {
+  const {
+    transcript, instruction, question, previousAnswers, images, knowledgeSnippets, quality, answerStyle, signal, onChunk,
+  } = params;
+  const named = String(question || '').trim();
+  const { mode, questionKind: kind, intent, allowNoResponse } = suggestionAnalysis(params);
   const thinkingLevel = resolveThinkingLevel({ mode, quality, kind });
   const answerTokens = answerTokensFor(kind, instruction);
 
-  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind });
+  const conversation = buildConversation({
+    transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse,
+  });
   const result = await callGemini({
     systemPrompt: buildSystemPrompt(mode, answerStyle),
     parts: buildUserParts(conversation, images),
@@ -1038,6 +1101,7 @@ async function generateSuggestion({
     groundingFiles,
     thinkingLevel,
     questionKind: kind,
+    intent,
     answerStyle: normalizeAnswerStyle(answerStyle),
   };
 }
@@ -1060,14 +1124,25 @@ const HEADLINE_SITUATIONS = {
   general: 'The user is in a live conversation right now.',
 };
 
+// Mode-specific lines for the first sentence, matching MODE_NOTES.
+const HEADLINE_MODE_RULES = {
+  interview: '',
+  meeting: `\n- In a meeting the first line can be a position, a concrete suggestion or a short question back. If someone pushed back on the user, acknowledge it and respond with a reason; never just agree, never get defensive. Don't open by praising or agreeing with their point.`,
+  presentation: `\n- An audience question: answer it directly. If the user seems lost, a short bridge back to their main point.`,
+  general: `\n- A natural reply: answer, suggest, or ask a short question back.`,
+};
+const HEADLINE_NO_RESPONSE_RULE = `\n- Only if the LATEST section says this was triggered automatically and there's genuinely nothing useful to say: reply with exactly ${NO_RESPONSE_SENTINEL} and nothing else.`;
+
 function buildHeadlineSystemPrompt(mode) {
-  const situation = Object.prototype.hasOwnProperty.call(HEADLINE_SITUATIONS, mode) ? HEADLINE_SITUATIONS[mode] : HEADLINE_SITUATIONS.general;
+  const m = normalizeMode(mode);
+  const situation = HEADLINE_SITUATIONS[m];
+  const modeRules = `${HEADLINE_MODE_RULES[m]}${m === 'interview' ? '' : HEADLINE_NO_RESPONSE_RULE}`;
   return `${situation} Give ONLY the first sentence the user should say out loud right now, in their own voice, in reply to the latest question. A fuller answer is being written separately and follows a moment later; your sentence is what they start talking with while it loads.
 - Exactly one short spoken sentence (under 25 words), first person, contractions, plain everyday words. It directly answers the question, or opens the answer, and works on its own. It should sound like how a real person naturally starts talking, not a polished opening line.
 - No preamble, no quotation marks around it, no labels, no markdown, no lists, no code.
 - A NEW coding, maths or design problem: say how you'd start (briefly restate what's asked, or the approach you're sure of). Never state a final number or claim you aren't sure of.
 - A follow-up about code already discussed (why X, what if, complexity, testing, edge cases): the direct answer in one line, consistent with the earlier answers.
-- Ground it in the conversation and the user's background. Never invent projects, employers, numbers or experience: if the question is about their experience and no matching fact is given, use a short [placeholder] instead.
+- Ground it in the conversation and the user's background. Never invent projects, employers, numbers or experience: if the question is about their experience and no matching fact is given, use a short [placeholder] instead.${modeRules}
 - ${BANNED_TELLS}`;
 }
 
@@ -1075,7 +1150,7 @@ function buildHeadlineSystemPrompt(mode) {
 // last couple of answers (they hold the code a follow-up is about) and the
 // knowledge snippets -- enough to say the right first sentence, small enough
 // to be quick.
-function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind }) {
+function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse }) {
   const recent = capTranscript(transcript, HEADLINE_TRANSCRIPT_CHARS);
   let context = `RECENT CONVERSATION (oldest first; "You" = the user, "Them" = the other side):\n\n${recent || '(no transcript yet)'}`;
   if (Array.isArray(previousAnswers) && previousAnswers.length) {
@@ -1093,6 +1168,10 @@ function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnipp
   if (instruction) latest += `\n\nAdditional instruction from the user: ${instruction}`;
   if (kind === 'problem') latest += '\n\nThis is a new problem to solve.';
   else if (kind === 'followup') latest += '\n\nThis is a follow-up about what was already discussed.';
+  if (mode && mode !== 'interview') {
+    if (intent && Object.prototype.hasOwnProperty.call(INTENT_HINTS, intent)) latest += `\n\n${INTENT_HINTS[intent]}`;
+    if (allowNoResponse) latest += `\n\n${AUTO_NO_RESPONSE_HINT}`;
+  }
   latest += '\n\nReply with ONLY the first sentence the user should say.';
   return { context, latest };
 }
@@ -1105,17 +1184,18 @@ function firstSpokenSentence(text) {
   return (m ? m[1] : t).replace(/["'”’]+$/, '').trim();
 }
 
-async function generateHeadline({
-  transcript, mode, instruction, question, previousAnswers, images, knowledgeSnippets, signal, onChunk,
-}) {
+async function generateHeadline(params) {
+  const {
+    transcript, instruction, question, previousAnswers, images, knowledgeSnippets, signal, onChunk,
+  } = params;
   const named = String(question || '').trim();
-  const latest = named || latestUtterance(transcript);
-  const hasImages = !!(images && images.length);
-  const kind = classifyQuestion(latest, { hasImages, ...priorContext(previousAnswers) });
+  const { mode, questionKind: kind, intent, allowNoResponse } = suggestionAnalysis(params);
   const filter = typeof onChunk === 'function' ? createStreamHumanizer() : null;
   const result = await callGemini({
     systemPrompt: buildHeadlineSystemPrompt(mode),
-    parts: buildUserParts(buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind }), images),
+    parts: buildUserParts(buildHeadlineConversation({
+      transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse,
+    }), images),
     generationConfig: { temperature: 0.3 },
     thinkingLevel: 'minimal',
     answerTokens: ANSWER_TOKENS.headline,
@@ -1134,7 +1214,7 @@ async function generateHeadline({
     const rest = filter.end(); // e.g. a short reply the opener check was still holding
     if (rest) onChunk(rest);
   }
-  return { text: firstSpokenSentence(humanizeAnswer(result.text)), questionKind: kind };
+  return { text: firstSpokenSentence(humanizeAnswer(result.text)), questionKind: kind, intent };
 }
 
 async function askFollowUp({
@@ -1257,6 +1337,12 @@ module.exports = {
   QUALITY_SETTINGS,
   ANSWER_STYLES,
   normalizeAnswerStyle,
+  MODES,
+  normalizeMode,
+  INTENTS: intentCore.INTENTS,
+  NO_RESPONSE_SENTINEL,
+  isNoResponse: intentCore.isNoResponse,
+  analyzeSuggestion,
   buildSystemPrompt,
   MAX_PROMPT_TRANSCRIPT_CHARS,
   TRANSCRIPT_TRIMMED_MARKER,

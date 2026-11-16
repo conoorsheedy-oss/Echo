@@ -416,6 +416,118 @@ test('system prompt: natural voice, banned AI tells, few-shot examples, CV facts
   }
 });
 
+// ---- Mode-specific prompts (shared core + one mode block) ----
+const MODE_LIST = ['interview', 'meeting', 'presentation', 'general'];
+const count = (hay, needle) => hay.split(needle).length - 1;
+
+test('mode prompts: the shared core appears once in every mode, plus that mode\'s block', () => {
+  for (const style of ['script', 'cues']) {
+    for (const mode of MODE_LIST) {
+      const system = ai.buildSystemPrompt(mode, style);
+      for (const core of ['TRUTH FIRST (this overrides', 'Sound like a real person talking', `Answer style: ${style.toUpperCase()}`, 'What you are given: the WHOLE conversation', 'One or more attached screen images', 'ONLY as a source of facts']) {
+        assert.equal(count(system, core), 1, `${mode}/${style}: "${core}" once`);
+      }
+      assert.equal(count(system, 'BEFORE (stiff AI)'), 3, `${mode}/${style}: tone examples once`);
+      const blocks = { interview: 'Interview rules:', meeting: 'Meeting rules.', presentation: 'Presentation rules:', general: 'Conversation rules:' };
+      for (const [m, heading] of Object.entries(blocks)) {
+        assert.equal(count(system, heading), m === mode ? 1 : 0, `${mode}/${style}: ${heading}`);
+      }
+      // New shared voice rules.
+      assert.match(system, /Don't reflexively agree with or praise the other person's point/);
+      assert.match(system, /Don't start with the other person's name or with "So basically"/);
+      for (const tell of ['Great point', "That's a great question", 'I completely agree']) assert.ok(system.includes(tell), `${mode}: bans ${tell}`);
+    }
+  }
+});
+
+test('mode prompts: STAR and the coding walk-through are interview-only', () => {
+  for (const style of ['script', 'cues']) {
+    const interview = ai.buildSystemPrompt('interview', style);
+    assert.match(interview, /STAR/);
+    assert.match(interview, /A\) A NEW problem/);
+    assert.match(interview, /B\) A FOLLOW-UP/);
+    for (const mode of ['meeting', 'presentation', 'general']) {
+      const system = ai.buildSystemPrompt(mode, style);
+      assert.ok(!/STAR/.test(system), `${mode}/${style}: no STAR`);
+      assert.ok(!system.includes('A) A NEW problem'), `${mode}/${style}: no interview coding walk-through`);
+      assert.ok(system.includes(ai.NO_RESPONSE_SENTINEL), `${mode}: may decline automatic suggestions`);
+    }
+    assert.ok(!interview.includes(ai.NO_RESPONSE_SENTINEL), 'interviews never decline');
+  }
+  const meeting = ai.buildSystemPrompt('meeting', 'script');
+  assert.match(meeting, /not answer an exam/);
+  assert.match(meeting, /Never automatically defensive, never automatically agreeing/);
+  assert.match(meeting, /the best contribution is a good question/);
+  assert.match(meeting, /Don't summarise the meeting back/);
+  assert.match(ai.buildSystemPrompt('presentation', 'script'), /bridge back to their main point/);
+  assert.match(ai.buildSystemPrompt('general', 'script'), /ask a short follow-up question back/);
+});
+
+test('mode prompts: fixed per (mode, style); unknown modes are general', () => {
+  for (const mode of MODE_LIST) {
+    for (const style of ['script', 'cues']) assert.equal(ai.buildSystemPrompt(mode, style), ai.buildSystemPrompt(mode, style));
+    assert.notEqual(ai.buildSystemPrompt(mode, 'script'), ai.buildSystemPrompt(mode, 'cues'));
+  }
+  assert.equal(new Set(MODE_LIST.map((m) => ai.buildSystemPrompt(m, 'script'))).size, 4);
+  for (const bad of ['bogus', '__proto__', 'constructor', undefined, '']) {
+    assert.equal(ai.buildSystemPrompt(bad, 'script'), ai.buildSystemPrompt('general', 'script'), String(bad));
+    assert.equal(ai.normalizeMode(bad), 'general');
+  }
+  assert.deepEqual([...ai.MODES], MODE_LIST);
+});
+
+test('meeting: intent hint + auto no-response allowance go in LATEST; the system prompt stays the same', async () => {
+  const calls = mockFetch((call) => sseResponse([textEvent('Fair, but the cost is the real issue.', 'STOP')], { signal: call.init.signal }));
+  const transcript = "You: I think we should move to Postgres.\nThem: I don't think that'll work.";
+  const auto = await ai.generateSuggestion({ transcript, mode: 'meeting', question: "I don't think that'll work.", requestKind: 'auto', onChunk: () => {} });
+  const explicit = await ai.generateSuggestion({ transcript, mode: 'meeting', question: "I don't think that'll work.", onChunk: () => {} });
+  assert.equal(auto.intent, 'disagreement');
+  assert.equal(explicit.intent, 'disagreement');
+  const [a, e] = calls;
+  assert.equal(a.body.systemInstruction.parts[0].text, e.body.systemInstruction.parts[0].text, 'same system prompt (prefix caching)');
+  assert.equal(a.body.systemInstruction.parts[0].text, ai.buildSystemPrompt('meeting', 'script'));
+  const aLatest = a.body.contents[0].parts.at(-1).text;
+  const eLatest = e.body.contents[0].parts.at(-1).text;
+  assert.match(aLatest, /Intent: disagreement/);
+  assert.match(aLatest, /triggered automatically/);
+  assert.ok(aLatest.includes(ai.NO_RESPONSE_SENTINEL));
+  assert.match(eLatest, /Intent: disagreement/);
+  assert.ok(!eLatest.includes(ai.NO_RESPONSE_SENTINEL), 'an explicit request must always answer');
+  assert.equal(a.body.generationConfig.thinkingConfig.thinkingLevel, 'low');
+  assert.equal(a.body.generationConfig.maxOutputTokens, ai.ANSWER_TOKENS.spoken + ai.THINKING_HEADROOM_TOKENS.low);
+  // A renderer-supplied intent wins over re-detection.
+  await ai.generateSuggestion({ transcript, mode: 'meeting', question: "I don't think that'll work.", intent: 'proposal', onChunk: () => {} });
+  assert.match(calls[2].body.contents[0].parts.at(-1).text, /Intent: a proposal/);
+});
+
+test('interview: no intent hint and never the no-response allowance, even for automatic requests', async () => {
+  const calls = mockFetch((call) => sseResponse([textEvent('Ok.', 'STOP')], { signal: call.init.signal }));
+  await ai.generateSuggestion({ transcript: 'Them: Tell me about a time you failed.', mode: 'interview', question: 'Tell me about a time you failed.', requestKind: 'auto', allowNoResponse: true, onChunk: () => {} });
+  const latest = calls[0].body.contents[0].parts.at(-1).text;
+  assert.ok(!/Intent:/.test(latest));
+  assert.ok(!latest.includes(ai.NO_RESPONSE_SENTINEL));
+  const a = ai.analyzeSuggestion({ transcript: 'Them: hi?', mode: 'interview', requestKind: 'auto' });
+  assert.equal(a.allowNoResponse, false);
+  assert.equal(ai.analyzeSuggestion({ transcript: 'Them: hi?', mode: 'meeting', requestKind: 'auto' }).allowNoResponse, true);
+  assert.equal(ai.analyzeSuggestion({ transcript: 'Them: hi?', mode: 'meeting', requestKind: 'explicit' }).allowNoResponse, false);
+});
+
+test('analyzeSuggestion: one analysis (kind + intent) per request; bad intents are recomputed', () => {
+  const base = { transcript: 'You: We could use Redis.\nThem: The problem with that is we lose the audit trail.', mode: 'meeting' };
+  const a = ai.analyzeSuggestion(base);
+  assert.equal(a.intent, 'disagreement');
+  assert.equal(a.questionKind, 'general');
+  assert.equal(a.mode, 'meeting');
+  assert.equal(ai.analyzeSuggestion({ ...base, intent: 'proposal' }).intent, 'proposal');
+  assert.equal(ai.analyzeSuggestion({ ...base, intent: '__proto__' }).intent, 'disagreement');
+  assert.equal(ai.analyzeSuggestion({ ...base, intent: 'nonsense' }).intent, 'disagreement');
+  assert.equal(ai.analyzeSuggestion({ ...base, mode: 'weird' }).mode, 'general');
+  const tech = ai.analyzeSuggestion({ transcript: 'Them: Write a function to reverse a linked list.', mode: 'interview' });
+  assert.equal(tech.questionKind, 'problem');
+  assert.equal(tech.intent, 'technical_question');
+  assert.ok(ai.INTENTS.includes('disagreement') && ai.INTENTS.length === 13);
+});
+
 test('answer style: Cues gets its own prompt variant; unknown styles fall back to Script', async () => {
   const cues = ai.buildSystemPrompt('interview', 'cues');
   assert.match(cues, /Answer style: CUES/);

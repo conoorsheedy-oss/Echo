@@ -59,22 +59,31 @@ function timedSse(pieces, signal) {
 const isHeadlineCall = (body) => /Give ONLY the first sentence/.test(body.systemInstruction.parts[0].text);
 
 // A fake ai module: each generator streams its pieces at the given delays.
-function fakeAi({ headline = [], answer = [], headlineError = null, answerText = 'Full answer.' } = {}) {
-  const seen = { headlineSignal: null, answerSignal: null, headlineCalls: 0 };
+// analysis: when set, the fake also has analyzeSuggestion() returning it.
+function fakeAi({ headline = [], answer = [], headlineError = null, answerText = 'Full answer.', analysis = null } = {}) {
+  const seen = { headlineSignal: null, answerSignal: null, headlineCalls: 0, analyzeCalls: 0, headlineParams: null, answerParams: null };
   async function play(pieces, signal, onChunk) {
     const t0 = Date.now();
     for (const [at, text] of pieces) {
       const wait = at - (Date.now() - t0);
-      if (wait > 0) await sleep(wait);
+      // Like a real fetch, an abort ends the wait at once.
+      if (wait > 0) {
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, wait);
+          if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+        });
+      }
       if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { code: 'ABORTED' });
       onChunk(text);
     }
   }
-  return {
+  const fake = {
     seen,
-    async generateHeadline({ signal, onChunk }) {
+    async generateHeadline(params) {
+      const { signal, onChunk } = params;
       seen.headlineCalls += 1;
       seen.headlineSignal = signal;
+      seen.headlineParams = params;
       if (headlineError) {
         await sleep(5);
         throw headlineError;
@@ -82,12 +91,21 @@ function fakeAi({ headline = [], answer = [], headlineError = null, answerText =
       await play(headline, signal, onChunk);
       return { text: headline.map((p) => p[1]).join('') };
     },
-    async generateSuggestion({ signal, onChunk }) {
+    async generateSuggestion(params) {
+      const { signal, onChunk } = params;
       seen.answerSignal = signal;
+      seen.answerParams = params;
       await play(answer, signal, onChunk || (() => {}));
       return { text: answerText, thinkingLevel: 'low' };
     },
   };
+  if (analysis) {
+    fake.analyzeSuggestion = () => {
+      seen.analyzeCalls += 1;
+      return analysis;
+    };
+  }
+  return fake;
 }
 
 function recorder() {
@@ -270,4 +288,161 @@ test('a model without the "minimal" level: the headline retries with low, full a
   assert.equal(calls[2].generationConfig.thinkingConfig.thinkingLevel, 'low', 'remembered for the session');
   await ai.generateSuggestion({ transcript: 'Them: Write a function to reverse a linked list.', mode: 'interview', onChunk: () => {} });
   assert.equal(calls[3].generationConfig.thinkingConfig.thinkingLevel, 'high', 'full answers still send their level');
+});
+
+// ---- "Nothing to add" (NO_RESPONSE sentinel) ----
+const { createSentinelGate, EXPLICIT_FALLBACK_TEXT } = require('../src/main/suggest-pipeline');
+const AUTO_MEETING = { mode: 'meeting', questionKind: 'general', intent: 'information_sharing', allowNoResponse: true };
+const EXPLICIT_MEETING = { ...AUTO_MEETING, allowNoResponse: false };
+const SENTINEL = ai.NO_RESPONSE_SENTINEL;
+const allText = (events) => events.map((e) => e.text).join('');
+
+test('sentinel gate: holds back only what could still be the sentinel', () => {
+  const g = createSentinelGate();
+  assert.deepEqual(g.push('[[NO_'), { state: 'maybe', out: '' });
+  assert.deepEqual(g.push('RESPONSE]]'), { state: 'yes', out: '' });
+  assert.deepEqual(g.push(' more'), { state: 'yes', out: '' });
+  const n = createSentinelGate();
+  assert.deepEqual(n.push('N'), { state: 'maybe', out: '' });
+  assert.deepEqual(n.push('o, I would wait.'), { state: 'no', out: 'No, I would wait.' });
+  assert.deepEqual(n.push(' Really.'), { state: 'no', out: ' Really.' });
+  const t = createSentinelGate();
+  assert.deepEqual(t.push('I'), { state: 'no', out: 'I' }, 'a normal first character goes straight out');
+  const short = createSentinelGate();
+  short.push('NO');
+  assert.equal(short.flush(), 'NO', 'an undecided ending is real text');
+});
+
+test('auto request: a sentinel full answer is skipped silently and the headline is cancelled', async () => {
+  const fake = fakeAi({
+    analysis: AUTO_MEETING,
+    headline: [[300, 'Too slow.']],
+    answer: [[10, '[[NO_'], [20, 'RESPONSE]]'], [400, ' never']],
+    answerText: SENTINEL,
+  });
+  const rec = recorder();
+  const result = await runSuggestion({ ai: fake, params: { mode: 'meeting', requestKind: 'auto' }, emit: rec.emit, headline: true, log: quietLog });
+  assert.deepEqual(result, { skipped: true, reason: 'no_response', intent: 'information_sharing' });
+  assert.deepEqual(rec.events, [], 'nothing reaches the renderer');
+  assert.ok(fake.seen.headlineSignal.aborted, 'sibling (headline) cancelled');
+  assert.ok(fake.seen.answerSignal.aborted, 'the full answer stream is stopped too');
+});
+
+test('auto request: a sentinel headline cancels the full answer and skips', async () => {
+  const fake = fakeAi({
+    analysis: AUTO_MEETING,
+    headline: [[10, SENTINEL]],
+    answer: [[300, 'Slow full answer.']],
+  });
+  const rec = recorder();
+  const t0 = Date.now();
+  const result = await runSuggestion({ ai: fake, params: {}, emit: rec.emit, headline: true, log: quietLog });
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'no_response');
+  assert.ok(Date.now() - t0 < 250, 'did not wait for the full answer');
+  assert.ok(fake.seen.answerSignal.aborted, 'full answer cancelled');
+  assert.deepEqual(rec.events, []);
+});
+
+test('auto request: a non-streamed sentinel answer is skipped too', async () => {
+  const fake = fakeAi({ analysis: AUTO_MEETING, answer: [], answerText: ` ${SENTINEL}` });
+  const result = await runSuggestion({ ai: fake, params: {}, emit: undefined, headline: true });
+  assert.equal(result.skipped, true);
+});
+
+test('explicit request: never skipped; the sentinel is never shown', async () => {
+  // Full answer says the sentinel: replaced by a short fallback line.
+  const fake = fakeAi({ analysis: EXPLICIT_MEETING, answer: [[10, SENTINEL]], answerText: SENTINEL });
+  const rec = recorder();
+  const result = await runSuggestion({ ai: fake, params: {}, emit: rec.emit, headline: false, log: quietLog });
+  assert.ok(!result.skipped);
+  assert.equal(result.text, EXPLICIT_FALLBACK_TEXT);
+  assert.ok(!allText(rec.events).includes('NO_RESPONSE'));
+
+  // Headline says the sentinel: dropped; the full answer still shows.
+  const fake2 = fakeAi({ analysis: EXPLICIT_MEETING, headline: [[5, SENTINEL]], answer: [[60, 'I would '], [70, 'wait a week.']] });
+  const rec2 = recorder();
+  const result2 = await runSuggestion({ ai: fake2, params: {}, emit: rec2.emit, headline: true, log: quietLog });
+  assert.equal(result2.text, 'Full answer.');
+  assert.deepEqual(rec2.events.map((e) => e.part), ['answer', 'answer']);
+  assert.equal(allText(rec2.events), 'I would wait a week.');
+});
+
+test('normal answers stream unchanged, including ones that start like the sentinel', async () => {
+  const fake = fakeAi({ analysis: AUTO_MEETING, headline: [[5, 'N'], [10, "o, I'd wait."]], answer: [[80, 'N'], [90, 'ot yet, '], [100, 'I think we wait.']] });
+  const rec = recorder();
+  const result = await runSuggestion({ ai: fake, params: {}, emit: rec.emit, headline: true, log: quietLog });
+  assert.equal(result.text, 'Full answer.');
+  assert.equal(rec.events.filter((e) => e.part === 'headline').map((e) => e.text).join(''), "No, I'd wait.");
+  assert.equal(rec.events.filter((e) => e.part === 'answer').map((e) => e.text).join(''), 'Not yet, I think we wait.');
+});
+
+test('one analysis per request, shared by the headline and the full answer', async () => {
+  const analysis = { mode: 'meeting', questionKind: 'general', intent: 'disagreement', allowNoResponse: true };
+  const fake = fakeAi({ analysis, headline: [[5, 'Fair point on cost.']], answer: [[40, 'Full.']] });
+  await runSuggestion({ ai: fake, params: { transcript: 'Them: x', mode: 'meeting' }, emit: recorder().emit, headline: true, log: quietLog });
+  assert.equal(fake.seen.analyzeCalls, 1);
+  for (const p of [fake.seen.headlineParams, fake.seen.answerParams]) {
+    assert.equal(p.intent, 'disagreement');
+    assert.equal(p.questionKind, 'general');
+    assert.equal(p.allowNoResponse, true);
+    assert.equal(p.transcript, 'Them: x');
+  }
+});
+
+test('real ai.js: an automatic meeting request answered with the sentinel never emits it', async () => {
+  const calls = [];
+  global.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    if (isHeadlineCall(body)) return timedSse([[60, textEvent('[[NO_RESP')], [70, textEvent('ONSE]]', 'STOP')]], init.signal);
+    return timedSse([[10, textEvent('[[NO')], [20, textEvent('_RESPONSE]]', 'STOP')]], init.signal);
+  };
+  const rec = recorder();
+  const result = await runSuggestion({
+    ai,
+    params: { transcript: 'You: hi all\nThem: Just so you know, the release is on Friday.', mode: 'meeting', requestKind: 'auto', question: 'Just so you know, the release is on Friday.' },
+    emit: rec.emit,
+    headline: true,
+    log: quietLog,
+  });
+  assert.equal(result.skipped, true);
+  assert.equal(result.intent, 'information_sharing');
+  assert.deepEqual(rec.events, []);
+  const full = calls.find((b) => !isHeadlineCall(b));
+  const head = calls.find((b) => isHeadlineCall(b));
+  assert.match(full.contents[0].parts.at(-1).text, /triggered automatically/);
+  if (head) assert.match(head.contents[0].parts.at(-1).text, /Intent: an update or statement/);
+});
+
+test('real ai.js: the same request in interview mode never gets the allowance', async () => {
+  const calls = [];
+  global.fetch = async (url, init) => {
+    calls.push(JSON.parse(init.body));
+    return timedSse([[5, textEvent('I would say yes.', 'STOP')]], init.signal);
+  };
+  const result = await runSuggestion({
+    ai,
+    params: { transcript: 'Them: Do you have any questions for us?', mode: 'interview', requestKind: 'auto', question: 'Do you have any questions for us?' },
+    emit: recorder().emit,
+    headline: true,
+    log: quietLog,
+  });
+  assert.equal(result.text, 'I would say yes.');
+  for (const b of calls) {
+    assert.ok(!JSON.stringify(b).includes('NO_RESPONSE'), 'no sentinel anywhere in an interview request');
+  }
+});
+
+test('headline system prompt: mode-aware rules, sentinel only outside interviews', () => {
+  const interview = ai.buildHeadlineSystemPrompt('interview');
+  assert.ok(!interview.includes(ai.NO_RESPONSE_SENTINEL));
+  assert.ok(!/In a meeting/.test(interview));
+  const meeting = ai.buildHeadlineSystemPrompt('meeting');
+  assert.match(meeting, /first line can be a position, a concrete suggestion or a short question back/);
+  assert.match(meeting, /never just agree, never get defensive/);
+  for (const mode of ['meeting', 'presentation', 'general', 'bogus']) {
+    assert.ok(ai.buildHeadlineSystemPrompt(mode).includes(ai.NO_RESPONSE_SENTINEL), mode);
+  }
+  assert.equal(ai.buildHeadlineSystemPrompt('bogus'), ai.buildHeadlineSystemPrompt('general'));
 });

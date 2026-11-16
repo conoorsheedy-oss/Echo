@@ -9,6 +9,8 @@ Echo is a plain Electron app: no framework, no bundler. Three pieces:
 │ pcm-core.js + pcm-worklet.js  PCM for Deepgram    │
 │ stt-core.js   speech-to-text key readiness (pure) │
 │ question-core.js  question? when to answer (pure) │
+│ intent-core.js  intent + needs a reply? (pure,    │
+│                 also required by main)            │
 │ gesture-core.js + gestures.js (optional webcam)   │
 └───────────────┬───────────────────▲───────────────┘
    api.* calls  │ invoke / send     │ events (ai:chunk, stt:stream-event, hotkey:*, window:*)
@@ -101,18 +103,27 @@ main: deepgram.js ─► wss://api.deepgram.com/v1/listen  (one socket per speak
 
 ## Suggestion flow
 
-1. A `Them:` line that looks like a question schedules an automatic answer. `question-core.js` decides both:
+0. **Intent layer** (`src/renderer/intent-core.js`, pure, rule-based, no API calls; loaded as a classic script after `question-core.js` and `require()`d by `ai.js` / `suggest-pipeline.js`). `classifyIntent(text, { mode, speaker, prior, recentYou, hasImages })` returns `{ intent, confidence, needsResponse, technical }`. Intents: `direct_question`, `opinion_request`, `follow_up`, `disagreement`, `proposal`, `suggestion_request`, `clarification_request`, `problem`, `information_sharing`, `explanation_request`, `behavioural_question`, `technical_question`, `no_response` (fillers / acknowledgements / under three words). It reuses `question-core.js`'s `looksLikeQuestion()` and owns `looksTechnical()` / `classifyQuestion()` (moved from `ai.js`, which re-exports them unchanged). `needsResponse` by mode:
+   - **interview**: exactly `looksLikeQuestion()`, so interviews trigger as they always did.
+   - **meeting**: any question-type intent, proposals and problems; disagreement only when it plausibly answers the user (they spoke within the last 2 `Them` lines and 60 s, or the line asks them directly).
+   - **presentation**: question-type intents (including explanation / clarification).
+   - **general**: question-type intents and disagreement.
+   - Never for `You` lines, information sharing or fillers. `shouldAutoTrigger(intent, { mode, speaker })` is the renderer's gate.
+
+1. A `Them:` line that needs a response (`autoTriggerDecision()` in `renderer.js`: in interviews, one that looks like a question) schedules an automatic answer. `question-core.js` decides:
    - **Is it a question?** A `?` anywhere, or interrogative wording at the start of a clause: what / why / how / which / who, can / could / would / do / did / have you, is it / is there / are there, tell me, walk / talk me through, explain, describe, give me an example, what if, how about, any edge cases, and interview tasks given as instructions ("Write a function...", "Implement...", "Given an array..."). Set-ups ("Let's say we have a million users.") are not questions.
    - **How long to wait** (`autoSuggestDelay()`): Deepgram final at end of speech (`speech_final`) on a question: **0 ms**. A question chunk the VAD cut at a pause (Groq): **150 ms**. Another finished sentence at a pause: 300 ms. A line that trails off (`...`, a trailing comma, "and the", "um"), a mid-speech cut or fixed chunks: 1.5 s.
    - A chunk cut mid-speech (the 12 s safety cut, or fixed-chunk fallback) with no `?`: Echo waits for their next chunk first.
    Any new `Them:` line restarts the wait. The same question, or fewer than 12 new characters from them since the last automatic answer, never re-fires.
    (No speculative start on Deepgram *interim* text: with 300 ms endpointing, `speech_final` arrives about as soon as a "no new words for ~350 ms" timer would fire, and starting from interim text would mean sending provisional transcript lines and paying for a restart whenever the final differs.)
-2. `renderer.js` calls `ai:suggest` with a `requestId`, the whole transcript, mode, earlier answers, quality setting, **answer style** (`script` / `cues`), any tray screenshots and `headline` (Settings > Answers > **Instant first line**, `localStorage` `echo.instantHeadline`, default on).
-3. `main.js` validates the payload, searches the knowledge base, registers the request in `ai-requests.js` and hands it to `suggest-pipeline.js`, which runs `ai.generateSuggestion()` and, when `headline` is on, `ai.generateHeadline()` in parallel:
+   Statements that need a reply (a disagreement, a proposal) use the same timing: 300 ms after a finished sentence at a pause, never mid-utterance. Diagnostics shows **Last auto trigger** (fired / not needed / skipped, with the intent).
+2. `renderer.js` calls `ai:suggest` with a `requestId`, the whole transcript, mode, earlier answers, quality setting, **answer style** (`script` / `cues`), `intent` + `intentConfidence`, any tray screenshots and `headline` (Settings > Answers > **Instant first line**, `localStorage` `echo.instantHeadline`, default on).
+3. `main.js` validates the payload (mode against `ai.MODES`, unknown → `general`; intent against `ai.INTENTS`, unknown → recomputed), searches the knowledge base, registers the request in `ai-requests.js` and hands it to `suggest-pipeline.js`, which first calls `ai.analyzeSuggestion()` ONCE (question kind, intent, `allowNoResponse` = automatic request outside interviews) and passes the same analysis to `ai.generateSuggestion()` and, when `headline` is on, `ai.generateHeadline()`, run in parallel:
    - Both share the request's `AbortSignal`, so a superseding request cancels both HTTP requests.
    - Chunks go out as `ai:chunk` with `part: 'headline'` or `part: 'answer'`.
    - If the full answer's first text arrives before any headline text, the headline call is aborted and never shown. When the full answer finishes (or fails), a still-running headline call is aborted. A failing headline is logged by error code only and never affects the full answer.
-   - The invoke resolves with the full answer only.
+   - **Nothing to add**: outside interviews, an automatic request may get the sentinel `[[NO_RESPONSE]]` back. Every stream's start is held back until it can't be the sentinel (usually one character, so no visible delay). On the sentinel from either call, both calls are aborted and the invoke resolves `{ skipped: true, reason: 'no_response' }`; the renderer drops it silently (no chip, no panel change, no history). Explicit requests are never skipped: a sentinel headline is dropped and a sentinel full answer becomes a short fallback line. The sentinel never reaches the renderer, the humanizer or the markdown renderer.
+   - Otherwise the invoke resolves with the full answer only.
 4. `ai.js`:
    - **Instant first line** (`generateHeadline()`): its own short system prompt ("give ONLY the first sentence the user should say out loud right now, in their voice", plus the same banned AI tells / no em dashes), `thinkingLevel: 'minimal'` on Gemini 3 (nothing sent on 2.x), 80 visible output tokens, the last ~8k chars of transcript + the last two answers (they hold the code a follow-up is about) + knowledge snippets + screenshots, streamed through the `humanize.js` filter, never retried without streaming.
    - **Full answer**: `classifyQuestion()` labels the question:
@@ -121,7 +132,7 @@ main: deepgram.js ─► wss://api.deepgram.com/v1/listen  (one socket per speak
      - `general`: everything else (behavioural, small talk, meetings).
    - Thinking (`resolveThinkingLevel()`): **Auto**: interview → `high` only for `problem`, `low` for `followup` and `general`; meeting / presentation / general → `low`. **Fast** = always `low`, **Max** = always `high`.
    - Output budget (`answerTokensFor()`): `problem` 2560 visible tokens, `followup` 700, `general` 400, Shorten / Expand 900; plus thinking headroom (minimal 256, low 1536, medium 3072, high 8192), because Gemini 3 counts thinking against `maxOutputTokens`. The cap never slows an answer; it only stops a runaway one.
-   - The question type also adds a one-line format hint at the end of the prompt (new problem: full walk-through; follow-up: short spoken answer, no full code again).
+   - The question type also adds a one-line format hint at the end of the prompt (new problem: full walk-through; follow-up: short spoken answer, no full code again). That's interview mode; the other modes get a one-line **intent hint** instead (e.g. "Intent: disagreement ... respond thoughtfully, not defensively"), a short technical hint for a new problem, and for automatic requests the "you may reply `[[NO_RESPONSE]]`" line. All of it is in LATEST, so the system prompt stays fixed per (mode, style).
    - **Prompt layout** (`buildConversation()` / `buildUserParts()`): system instruction (the same for every question in a mode/style) → full transcript (append-only, the long stable prefix) → earlier answers → knowledge snippets → screenshots note, then the screenshots as image parts, then a final text part `=== LATEST ===` (last lines, the question/instruction, the format hint). Gemini's implicit caching reuses a shared prefix, so the block that only grows at its end goes first; the knowledge snippets (searched with the question itself) and the newest answer change on almost every question, so they go after it. Putting them first would make the shared prefix stop at the system prompt.
    - It streams from `streamGenerateContent?alt=sse`. Each text piece goes through the `humanize.js` stream filter and is sent back as an `ai:chunk` event. If the stream breaks, the full answer retries once without streaming.
 5. The renderer shows the answer. The **first sentence is rendered big** (`p.headline`) as soon as it starts streaming, so the user can start talking while the rest arrives. A sentence only ends at `. ! ?` followed by whitespace, so text already on screen never re-flows. Script answers then show one sentence per line; Cues answers a short bold-keyword list.
@@ -136,7 +147,13 @@ Chat (`ai:ask`) works the same way (same question classifier and thinking policy
 
 ## Answer voice and style
 
-Prompts live in `ai.js`:
+Prompts live in `ai.js`. The suggest system prompt is `MODE_INTROS[mode]` + one shared core (`GROUNDING`, `HUMAN_VOICE` with the banned tells and three tone examples, `SCRIPT_STYLE` / `CUES_STYLE`, then the context / screen / knowledge notes) with one `MODE_NOTES[mode]` block after the answer style:
+
+- **interview**: STAR for behavioural questions, experience questions grounded or `[placeholders]`, and `TECHNICAL_STYLE` (new-problem walk-through vs follow-up).
+- **meeting**: help the user contribute to a discussion, not answer an exam: opinion → a clear position + one reason; disagreement → acknowledge, then hold with a reason / concede part / propose a test (never automatically defensive or agreeing); proposal → a benefit, a risk or question, or an improvement; ideas → one or two; problem → a next step or a clarifying question; clarification → restate simply. The first line can be a question. 1-3 lines, no summarising the meeting back, technical only when the discussion is.
+- **presentation**: short talking points; audience question → direct answer + one supporting point; a bridge back to the main point if the user is lost.
+- **general**: a natural reply (answer, explain, suggest or ask back), no interview framing.
+- Every non-interview block allows `[[NO_RESPONSE]]` for automatic requests only. STAR and the coding walk-through appear only in interview mode. The headline prompt has matching per-mode lines.
 
 - `HUMAN_VOICE` (suggest) asks for how people actually talk: contractions, plain words, short varied sentences, first person, concrete specifics, an occasional "So," / "Yeah, so" / "Honestly," opener. It bans common AI tells ("Great question", "Certainly", "leverage", "delve", "spearheaded", "robust", "seamless", "in conclusion", em dashes, three-adjective lists, "Not only X but Y") and includes three BEFORE (stiff AI) → AFTER (spoken) examples. The chat prompt gets the same ban list.
 - Knowledge files (CV / notes) are for **facts only**; the prompt says never to copy their wording, because CVs are often AI-written.
@@ -165,8 +182,9 @@ Prompts live in `ai.js`:
 - `test/gesture-core.test.js`: the hold-to-confirm state machine with synthetic frames.
 - `test/vad-core.test.js`: the voice-activity chunker with synthetic RMS frames (speech start, 550 ms silence cut, min/max chunk length, blips, idle reset, adaptive noise floor, hysteresis, throttled frames).
 - `test/ai-answers.test.js`: streaming, fallback, cancellation, thinking levels, the new-problem / follow-up classifier (dozens of realistic problem, follow-up and behavioural questions), output budgets, prompt building (voice rules, answer styles, layout and the shared-prefix property) and the `humanize.js` safety net, with `fetch` mocked.
-- `test/suggest-pipeline.test.js`: the instant first line + full answer pipeline with fake and real (`fetch`-mocked) Gemini calls: headline first, late headline dropped, failures isolated, one cancellation for both, setting off = no extra call, a timing test where the headline reaches the first visible token well before a delayed full stream, and the headline request itself (minimal thinking, tiny budget, trimmed context, no non-streaming retry).
+- `test/suggest-pipeline.test.js`: the no-response sentinel (auto skipped silently, never emitted, sibling call cancelled; explicit never skipped), one shared analysis for both calls, and the instant first line + full answer pipeline with fake and real (`fetch`-mocked) Gemini calls: headline first, late headline dropped, failures isolated, one cancellation for both, setting off = no extra call, a timing test where the headline reaches the first visible token well before a delayed full stream, and the headline request itself (minimal thinking, tiny budget, trimmed context, no non-streaming retry).
 - `test/question-core.test.js`: question detection by wording, "trailing off" detection and the auto-suggest delays (0 / 150 / 300 / 1500 ms).
+- `test/intent-core.test.js`: intent labels for realistic lines of every intent, `needsResponse` per mode (disagreement + recency), interview triggering identical to `looksLikeQuestion()`, never on `You` lines, the mode allowlist and the sentinel helpers.
 - `test/deepgram-core.test.js`: listen URL, message parsing, the interim/final assembler (`speech_final`, `UtteranceEnd`, length cuts, `Finalize` flushes), error/close classification, backoff and KeepAlive/Finalize timing, PCM frame validation.
 - `test/deepgram-stream.test.js`: `deepgram.js` with a fake WebSocket and clock (auth header, 401/402/429/offline, queueing, KeepAlive, CloseStream, reconnect then fatal error) and the Deepgram key test with `fetch` mocked.
 - `test/pcm-core.test.js`: downsampling (48 / 44.1 kHz → 16 kHz, no drift), Int16 conversion, framing and the talk-only audio gate.

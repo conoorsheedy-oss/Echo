@@ -1,7 +1,8 @@
 // Echo overlay UI. Talks to the main process only through window.assistant
 // (preload.js), wrapped below as `api`. vad-core.js, pcm-core.js,
-// stt-core.js and question-core.js load before this file
-// (window.EchoVadCore / EchoPcmCore / EchoSttCore / EchoQuestionCore);
+// stt-core.js, question-core.js and intent-core.js load before this file
+// (window.EchoVadCore / EchoPcmCore / EchoSttCore / EchoQuestionCore /
+// EchoIntentCore);
 // gestures.js loads after it and uses window.echoGestureBridge (bottom of
 // this file).
 
@@ -16,6 +17,12 @@ const VAD_MAX_CHUNK_MS = (window.EchoVadCore && window.EchoVadCore.MAX_CHUNK_MS)
 // several sentences, so a question often lands mid-chunk ("yeah so, what's
 // your approach here").
 const Question = window.EchoQuestionCore;
+// What kind of thing did they say (question, opinion request, disagreement,
+// proposal, problem, small talk...) and does it need an automatic answer in
+// this mode -- see intent-core.js. Interview mode triggers exactly as
+// before (looksLikeQuestion); meeting / general also trigger on
+// disagreement, proposals, problems and requests for ideas.
+const Intent = window.EchoIntentCore;
 
 let micStream = null;
 let systemStream = null;
@@ -59,6 +66,8 @@ const MIN_NEW_THEM_CHARS = 12;
 const QUESTION_JOIN_MS = 10000;
 let autoSuggestTimer = null;
 let lastAutoQuestionKey = '';
+// The intent of the line that scheduled the pending automatic suggestion.
+let pendingTriggerIntent = null;
 let themCharsTotal = 0;
 let themCharsAtLastAuto = 0;
 
@@ -552,12 +561,18 @@ function appendLine(speaker, text, meta = null) {
     awaitingNextThemLine = false;
     clearTimeout(pendingQuestionTimer);
     pendingQuestionTimer = null;
+    pendingTriggerIntent = null; // worked out again on the whole question
     scheduleAutoSuggest(delay);
     return;
   }
 
-  // Auto-suggest when the other side seems to have asked a question.
-  if (speaker === 'Them' && Question.looksLikeQuestion(text)) {
+  // Auto-suggest when the other side said something the user should answer:
+  // a question (every mode), or in meetings / general conversation also a
+  // disagreement, a proposal, a problem or a request for ideas.
+  const decision = speaker === 'Them' ? autoTriggerDecision(text) : null;
+  if (decision) noteAutoTrigger(decision);
+  if (decision && decision.trigger) {
+    pendingTriggerIntent = decision.intent;
     if (/\?\s*$/.test(text.trim()) || (meta && meta.cut === 'silence')) {
       // Ends with "?", or they stopped talking: the question is done.
       scheduleAutoSuggest(delay);
@@ -574,6 +589,50 @@ function appendLine(speaker, text, meta = null) {
       }, (meta && meta.cut === 'max' ? VAD_MAX_CHUNK_MS : CHUNK_MS) + 4000); // one full chunk + generous STT margin
     }
   }
+}
+
+// The intent of a "Them" line, plus whether it should fire an automatic
+// suggestion in the current mode (intent-core.js, pure + unit-tested).
+function intentContext() {
+  const recent = answerHistory.slice(-2);
+  let youIndex = -1;
+  for (let i = transcriptLines.length - 1; i >= 0; i--) {
+    if (transcriptLines[i].speaker === 'You') { youIndex = i; break; }
+  }
+  const recentYou = youIndex === -1 ? null : {
+    themLinesSince: transcriptLines.slice(youIndex + 1).filter((l) => l.speaker === 'Them').length,
+    msSince: Date.now() - transcriptLines[youIndex].ts,
+  };
+  return {
+    mode: modeSelect.value,
+    speaker: 'them',
+    prior: {
+      hasPriorAnswer: answerHistory.length > 0,
+      lastAnswerTechnical: recent.some((a) => /```/.test(a.text || '') || Intent.looksTechnical(a.question || '')),
+    },
+    recentYou,
+  };
+}
+
+function classifyForSend(text) {
+  return Intent.classifyIntent(text || '', intentContext());
+}
+
+// { trigger, intent } for the "Them" line that just landed.
+function autoTriggerDecision(text) {
+  const ctx = intentContext();
+  const intent = Intent.classifyIntent(text, ctx);
+  return { trigger: Intent.shouldAutoTrigger(intent, ctx), intent };
+}
+
+// Diagnostics only: why the last "Them" line did or didn't fire.
+let lastAutoNote = 'nothing yet';
+function noteAutoTrigger(decision) {
+  const { intent } = decision;
+  lastAutoNote = decision.trigger
+    ? `fired (${intent.intent}, ${intent.confidence})`
+    : `not needed (${intent.intent})`;
+  if (!diagnosticsOverlay.classList.contains('hidden')) renderDiagnostics();
 }
 
 // ---- Live (interim) lines: Deepgram mode only ----
@@ -664,7 +723,9 @@ function autoSuggest() {
   if (themCharsTotal - themCharsAtLastAuto < MIN_NEW_THEM_CHARS) return; // tiny change
   lastAutoQuestionKey = key;
   themCharsAtLastAuto = themCharsTotal;
-  requestSuggestion(undefined, { question, auto: true });
+  const intent = pendingTriggerIntent || classifyForSend(question);
+  pendingTriggerIntent = null;
+  requestSuggestion(undefined, { question, auto: true, intent });
 }
 
 // Clearing the transcript starts a fresh session: earlier answers and any
@@ -679,6 +740,7 @@ function clearTranscript() {
   pendingQuestionTimer = null;
   cancelAutoSuggest();
   lastAutoQuestionKey = '';
+  pendingTriggerIntent = null;
   themCharsTotal = 0;
   themCharsAtLastAuto = 0;
   lastThemChunk = null;
@@ -2362,6 +2424,9 @@ api.onAiChunk((payload) => {
 //                current one (Shorten / Expand / Regenerate).
 // opts.auto: true for question-detected suggestions (never replace a
 //            visible answer -- see CALM ANSWERS above).
+// opts.intent: intent-core.js result for the line being answered (worked
+//            out here when missing). Explicit requests always answer: the
+//            intent only shapes the prompt, needsResponse is ignored.
 async function requestSuggestion(instruction, opts = {}) {
   // Works with or without listening (e.g. a screenshot-only question) --
   // it only needs the Gemini key.
@@ -2380,6 +2445,7 @@ async function requestSuggestion(instruction, opts = {}) {
   const questionLine = opts.question !== undefined
     ? (opts.question || '')
     : (shownAnswer && shownAnswer.question) || '';
+  const intentInfo = opts.intent || classifyForSend(questionLine || recentThemQuestion() || '');
 
   // An explicit request supersedes everything in flight; an automatic one
   // only older automatic ones (main.js aborts the same set).
@@ -2431,6 +2497,8 @@ async function requestSuggestion(instruction, opts = {}) {
       answerStyle: req.answerStyle,
       images: shots.images,
       headline: req.useHeadline,
+      intent: intentInfo.intent,
+      intentConfidence: intentInfo.confidence,
     };
     req.sentAt = performance.now();
     const result = await api.generateSuggestion(payload);
@@ -2438,13 +2506,28 @@ async function requestSuggestion(instruction, opts = {}) {
     // (even if a newer request superseded this one's answer).
     screenshotsSent(shots.ids);
     if (req.superseded) return;
+    const isObj = result && typeof result === 'object';
+    if ((isObj && result.skipped) || (auto && Intent.isNoResponse(isObj ? result.text : result))) {
+      // An automatic suggestion the model judged unnecessary ("nothing to
+      // add"): drop it silently. No chip, no panel change, no history. (Only
+      // if its instant first line was already showing does the panel go
+      // back to what it showed before.)
+      dropPendingStream(req);
+      if (panelOwnerId === id && req.started) restorePanel();
+      lastAutoNote = `skipped: nothing to add (${intentInfo.intent})`;
+      if (!diagnosticsOverlay.classList.contains('hidden')) renderDiagnostics();
+      return;
+    }
+    if (auto) lastAutoNote = `answered (${intentInfo.intent})`;
     noteFirstToken(req); // no-op if it streamed; times a non-streamed answer
     // ai:suggest resolves { text, groundingFiles } -- the full answer, which
     // also replaces whatever was streamed (it's authoritative if streaming
     // fell back to a normal request part-way).
-    const isObj = result && typeof result === 'object';
+    const rawText = (isObj ? result.text : result) || '';
     const answer = {
-      text: (isObj ? result.text : result) || '(no suggestion returned)',
+      // main.js already swaps a "nothing to add" reply for a short line on
+      // requests you asked for; this only guards the marker reaching the screen.
+      text: Intent.isNoResponse(rawText) ? 'Nothing obvious to add here yet. Try Regenerate.' : (rawText || '(no suggestion returned)'),
       question: questionLine,
       groundingFiles: isObj ? result.groundingFiles : undefined,
       style: (isObj && result.answerStyle) || req.answerStyle,
@@ -2701,6 +2784,7 @@ function renderDiagnostics() {
     ['System audio', systemRecorder ? 'capturing' : 'off'],
     ['Audio chunks', describeChunking()],
     ['Speech end → first answer word', describeLatency()],
+    ['Last auto trigger', lastAutoNote],
     ['Last answer timing', describeTimingSplit()],
     ['Instant first line', instantHeadlineEnabled() ? 'on' : 'off'],
     ['Privacy mode', privacyModeEnabled ? 'on' : 'off'],

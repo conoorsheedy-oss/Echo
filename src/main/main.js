@@ -843,12 +843,26 @@ function partForwarder(evt, requestId) {
   };
 }
 
+// Mode allowlist (ai.MODES); anything unknown is treated as 'general'.
+function validateMode(mode) {
+  assertOptionalString(mode, 'mode', 50);
+  return ai.normalizeMode(mode);
+}
+
+// The renderer's intent label (intent-core.js). Unknown or missing ->
+// undefined, and suggest-pipeline.js works it out again from the transcript.
+function validateIntent(intent) {
+  return typeof intent === 'string' && ai.INTENTS.includes(intent) ? intent : undefined;
+}
+
 // headline: Settings > Answers > "Instant first line" (default on). Strict
 // boolean; anything else means off.
-handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images, headline } = {}) => {
+// intent: the renderer's intent label (re-checked here, recomputed if
+// missing). A skipped automatic request resolves { skipped: true, reason }.
+handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images, headline, intent } = {}) => {
   const id = validateRequestId(requestId);
   assertOptionalString(transcript, 'transcript', MAX_TRANSCRIPT_CHARS);
-  assertOptionalString(mode, 'mode', 50);
+  const safeMode = validateMode(mode);
   assertOptionalString(instruction, 'instruction', 4000);
   assertOptionalString(question, 'question', 4000);
   const prior = validatePreviousAnswers(previousAnswers);
@@ -866,7 +880,9 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
       ai,
       params: {
         transcript,
-        mode,
+        mode: safeMode,
+        requestKind,
+        intent: validateIntent(intent),
         instruction,
         question,
         previousAnswers: prior,
@@ -891,6 +907,7 @@ handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAn
   assertOptionalString(question, 'question', 4000);
   assertOptionalString(mode, 'mode', 50);
   if (!question || !question.trim()) throw new Error('Type a question first.');
+  const safeMode = ai.normalizeMode(mode);
   const prior = validatePreviousAnswers(previousAnswers);
   const q = validateQuality(quality);
   const preparedImages = privacyModeEnabled ? undefined : prepareImages(images);
@@ -901,7 +918,7 @@ handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAn
     return await ai.askFollowUp({
       transcript,
       question,
-      mode,
+      mode: safeMode,
       previousAnswers: prior,
       quality: q,
       images: preparedImages,
