@@ -28,6 +28,8 @@ Echo is a plain Electron app: no framework, no bundler. Three pieces:
 │ suggest-pipeline.js  answer + instant first line  │
 │ keyStore.js   encrypted keys (safeStorage)        │
 │ knowledge.js  keyword search over your notes      │
+│ interview-session.js  threads, facts, CV query    │
+│               (pure, memory only)                 │
 └───────────────────────────────────────────────────┘
 ```
 
@@ -51,7 +53,7 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 | Area | Renderer → main (`invoke` unless noted) | Main → renderer (events) |
 |---|---|---|
 | Audio | `desktop:get-audio-source`, `stt:transcribe`, `stt:stream-start`, `stt:stream-stop`, `stt:stream-audio` (send) | `stt:stream-event` |
-| Answers | `ai:suggest`, `ai:ask`, `ai:summarize`, `summary:export` | `ai:chunk` (`{ requestId, part: 'answer' \| 'headline', text }`) |
+| Answers | `ai:suggest`, `ai:ask`, `ai:summarize`, `summary:export`, `session:reset` | `ai:chunk` (`{ requestId, part: 'answer' \| 'headline', text }`) |
 | Keys | `keys:status`, `keys:save`, `keys:remove`, `keys:test`, `external:open` | |
 | Screen | `screen:list-sources`, `screen:capture` | |
 | Knowledge | `knowledge:status`, `knowledge:reload`, `knowledge:open-folder`, `knowledge:add-files` | |
@@ -118,7 +120,7 @@ main: deepgram.js ─► wss://api.deepgram.com/v1/listen  (one socket per speak
    (No speculative start on Deepgram *interim* text: with 300 ms endpointing, `speech_final` arrives about as soon as a "no new words for ~350 ms" timer would fire, and starting from interim text would mean sending provisional transcript lines and paying for a restart whenever the final differs.)
    Statements that need a reply (a disagreement, a proposal) use the same timing: 300 ms after a finished sentence at a pause, never mid-utterance. Diagnostics shows **Last auto trigger** (fired / not needed / skipped, with the intent).
 2. `renderer.js` calls `ai:suggest` with a `requestId`, the whole transcript, mode, earlier answers, quality setting, **answer style** (`script` / `cues`), `intent` + `intentConfidence`, any tray screenshots and `headline` (Settings > Answers > **Instant first line**, `localStorage` `echo.instantHeadline`, default on).
-3. `main.js` validates the payload (mode against `ai.MODES`, unknown → `general`; intent against `ai.INTENTS`, unknown → recomputed), searches the knowledge base, registers the request in `ai-requests.js` and hands it to `suggest-pipeline.js`, which first calls `ai.analyzeSuggestion()` ONCE (question kind, intent, `allowNoResponse` = automatic request outside interviews) and passes the same analysis to `ai.generateSuggestion()` and, when `headline` is on, `ai.generateHeadline()`, run in parallel:
+3. `main.js` validates the payload (mode against `ai.MODES`, unknown → `general`; intent against `ai.INTENTS`, unknown → recomputed), updates the interview session state and searches the knowledge base with its query (see **Interview session state** below), registers the request in `ai-requests.js` and hands it to `suggest-pipeline.js`, which first calls `ai.analyzeSuggestion()` ONCE (question kind, intent, `allowNoResponse` = automatic request outside interviews) and passes the same analysis to `ai.generateSuggestion()` and, when `headline` is on, `ai.generateHeadline()`, run in parallel:
    - Both share the request's `AbortSignal`, so a superseding request cancels both HTTP requests.
    - Chunks go out as `ai:chunk` with `part: 'headline'` or `part: 'answer'`.
    - If the full answer's first text arrives before any headline text, the headline call is aborted and never shown. When the full answer finishes (or fails), a still-running headline call is aborted. A failing headline is logged by error code only and never affects the full answer.
@@ -144,6 +146,42 @@ main: deepgram.js ─► wss://api.deepgram.com/v1/listen  (one socket per speak
 Chat (`ai:ask`) works the same way (same question classifier and thinking policy, no instant first line) but streams into the chat log. Summaries (`ai:summarize`) use a plain request with a JSON schema.
 
 **Latency stat** (Diagnostics, `Ctrl+Shift+D`): time from the end of the speech in the latest `Them` chunk (last voiced VAD frame) to the first streamed token of the answer that followed, from **either** call (instant first line or full answer), last value and average of the last 10, with the speech-to-text share shown separately. **Last answer timing** splits the latest request: end of speech → request sent, request → first instant-first-line token, request → first full-answer token (measured in the renderer, so IPC is included).
+
+## Interview session state (Phase 2a)
+
+`src/main/interview-session.js` is pure (no Electron, no I/O, no API calls). `main.js` keeps one session in memory for the current listening session (`liveInterview`). It is never written to disk; `session:reset` (sent by the renderer on **Stop** and **Clear transcript**) drops it, and quitting loses it. In 2a it changes only one thing an answer sees: the **knowledge snippets** (CV lookup). The prompts, thinking level, format, classification, streaming and cancellation are untouched; the state is exposed through `getThreadContext()` for Phase 2b.
+
+**Per request** (`ai:suggest`): `planKnowledgeSearch()` ingests the transcript, links the request's question (or, with no question and no instruction, the latest interviewer question), and returns `{ query, prefer, threadId, questionId, link, label, generation, afterLine }`. `main.js` searches with `query` (+ `prefer`), runs the answer as before, then `recordSuggestion()` logs the finished answer (not skipped / sentinel answers; a stale `generation` after a reset is ignored). Any exception in the session layer resets it and falls back to the old query. Everything is synchronous: about 5 ms per request on a 1,000-line session; a full rebuild of 1,000 lines (first request after a reset) about 50-120 ms.
+
+**Ingestion** (`ingestTranscript()`): the renderer resends the whole transcript every time; only lines past the previously seen prefix are processed. A transcript that no longer extends that prefix (cleared / new session) resets the state; one whose oldest lines were trimmed (the renderer's ~990k-char cap) carries on, keeping absolute line indexes. A `Them` line is a **question** when `question-core.looksLikeQuestion()` says so or `intent-core.classifyIntent()` gives a question-type intent; the second half of a question cut mid-sentence (`endsMidThought()`) joins the same question. Other `Them` lines and every `You` line attach to the current question / thread.
+
+**Items** (every stored record, `session.items`):
+
+| field | values |
+|---|---|
+| `type` | `interviewer_statement` (a `Them` line), `candidate_statement` (a `You` line, or a knowledge snippet used for the thread), `echo_suggestion` (a whole suggestion, or one atomic detail / code block from it), `confirmed_detail`, `inferred` (thread type, link decision) |
+| `status` | `stated`, `suggested`, `confirmed`, `inferred`, `superseded` (an older link decision after re-resolution, an older code block, a confirmation made in the wrong thread) |
+| `source` | `{ kind: 'transcript', ref: absolute line index }`, `{ kind: 'suggestion', ref: requestId }`, `{ kind: 'knowledge', ref: file name }`, `{ kind: 'rule', ref: rule name }` |
+| also | `id`, `text` (verbatim for lines and snippets), `threadId`, `questionId`, `order`, `timestamp`, `labels`, and `confidence` on `inferred` items |
+
+Rule-based categories are **labels** (`{ label, confidence, source: { kind: 'rule' } }`) on an item that keeps its true type and source: `question`, `problem_statement`, `constraint` ("assume", "you can't use", "in O(1) space", "n up to 10^5", "the input is sorted"), `interviewer_fact` ("we use Go on the backend", "our team", "the role involves"), `transition`, `candidate_claim` (first-person experience: "I built / led / worked on", "at my last internship"), `knowledge_snippet`.
+
+**Threads** (`session.threads`): `{ id, number, title (first question), type (behavioural | technical_problem | concept | experience | system_design | other) + typeConfidence, openedAt, status (open | answered | merged), questionIds (opening), followUpIds, interviewerLineIds, candidateLineIds, suggestionIds, pinned: { problemStatement, constraints, interviewerFacts, candidateClaims, confirmedDetails }, code (latest suggested code block, always `suggested`), knowledgeSources }`. Arrays hold item ids; `getThreadContext()` returns copies of the items.
+
+**Linking** (`decideLink()`, scores per interpretation: `new`, or `follow_up` of each of the 20 most recent threads; confidence = top / sum of the top three):
+- Explicit transition ("next question", "let's move on", "switching gears", "different topic"), in the question or a line just before it: **new**, 0.95.
+- Reference back ("going back to", "earlier you mentioned", "you said earlier", "circle back to"): +0.7 to the thread sharing the most terms (or, with none, the latest technical thread for "solution / code / approach", the latest behavioural one for "project / team / story").
+- New problem (`classifyQuestion() === 'problem'`): new +0.5. Behavioural opener (`intent-core` `behavioural_question`): new +0.45.
+- Technical follow-up (`classifyQuestion() === 'followup'`) or behavioural follow-up ("what was the outcome", "what did you learn", "what would you do differently", "how did the team react", intent-core `follow_up`): +0.45 to the current thread, or to the latest thread of the matching kind when the current one is the other kind.
+- Short pronoun reference ("walk me through that"): +0.35 to the current thread; if the current thread has no answer yet and an earlier one does, +0.2 current / +0.4 earlier (deliberately ambiguous).
+- Type change (technical vs behavioural): new +0.25. Term overlap: +0.15 per shared word (max 4), +0.2 more for 2+ shared words with an older thread. No marker and no shared words: new +0.2.
+- **Provisional** when confidence < **0.6** (`LINK_CONFIDENCE_THRESHOLD`): the best interpretation is used, the others stay in `link.alternatives` / `interpretations`. Later evidence re-resolves it: lines attached to the question are scored against each interpretation's thread (shared words, +2 when the candidate says a detail Echo suggested in that thread), and a later confident follow-up of one of them adds 1. When one thread leads with ≥ 2 and a margin ≥ 1.5, the question (and its lines, suggestions and snippets) moves there; the old link item becomes `superseded`, an emptied thread becomes `merged`. An explicit transition settles a provisional link as it is.
+
+**Confirmation** (per detail, never per suggestion): `extractDetails()` pulls atomic details from each suggestion: complexities (`O(n log n)`), named data structures / techniques ("hash map", "two pointers", "BFS"), languages / tools, numbers with units / percentages, and names that also appear in the knowledge snippets used for it. A detail becomes a `confirmed_detail` only when a candidate line in the **same thread**, spoken after the request was made, contains it: normalised exact phrase or a small alias table ("O(n)" = "o of n" = "linear time"; "hash map" = "hashmap" = "hash table" = "dictionary"; "BFS" = "breadth first search"), not right after a negation ("instead of sorting"). The confirmed item records the suggestion id, the detail item, the candidate line id / index / verbatim text and the alias matched. Unconfirmed details stay `suggested` and are never candidate facts; code is never confirmed.
+
+**Knowledge query** (`buildKnowledgeQuery()`): a question that opens its own thread is searched exactly as before (the question text), so its snippets and prompt are byte-identical. A follow-up searches with the question + the thread's original question + (technical) the problem statement + names the candidate said in the thread + up to three of their claim lines + confirmed details, never Echo's unconfirmed suggestion text. Snippets already used for the thread are passed as `prefer` to `knowledge.searchKnowledge(query, topK, { prefer })`, which multiplies their score by 1.5 only if they still match (still top 4 overall; without `opts` the ranking is unchanged). Outside Interview mode, and for Shorten / Expand without a question, the query is the old one (`question || instruction || last line`).
+
+Diagnostics shows the last answer's thread: `#3 follow-up (0.82)` or `#4 follow-up? (0.45, alt: follow-up of #3)`.
 
 ## Answer voice and style
 
@@ -183,6 +221,7 @@ Prompts live in `ai.js`. The suggest system prompt is `MODE_INTROS[mode]` + one 
 - `test/vad-core.test.js`: the voice-activity chunker with synthetic RMS frames (speech start, 550 ms silence cut, min/max chunk length, blips, idle reset, adaptive noise floor, hysteresis, throttled frames).
 - `test/ai-answers.test.js`: streaming, fallback, cancellation, thinking levels, the new-problem / follow-up classifier (dozens of realistic problem, follow-up and behavioural questions), output budgets, prompt building (voice rules, answer styles, layout and the shared-prefix property) and the `humanize.js` safety net, with `fetch` mocked.
 - `test/suggest-pipeline.test.js`: the no-response sentinel (auto skipped silently, never emitted, sibling call cancelled; explicit never skipped), one shared analysis for both calls, and the instant first line + full answer pipeline with fake and real (`fetch`-mocked) Gemini calls: headline first, late headline dropped, failures isolated, one cancellation for both, setting off = no extra call, a timing test where the headline reaches the first visible token well before a delayed full stream, and the headline request itself (minimal thinking, tiny budget, trimmed context, no non-streaming retry).
+- `test/interview-session.test.js`: scripted interviews for the session state: technical thread + follow-ups, "let's move on" into a behavioural thread, older-thread references, an ambiguous follow-up kept provisional and re-resolved by the candidate's answer, per-detail confirmation (aliases, negation, same thread, timing), claims / facts / constraints with their sources, resets, a schema check of every item, and the knowledge query with a fixture CV (the follow-up finds the same story; a plain question's snippets and prompt are byte-identical to before).
 - `test/question-core.test.js`: question detection by wording, "trailing off" detection and the auto-suggest delays (0 / 150 / 300 / 1500 ms).
 - `test/intent-core.test.js`: intent labels for realistic lines of every intent, `needsResponse` per mode (disagreement + recency), interview triggering identical to `looksLikeQuestion()`, never on `You` lines, the mode allowlist and the sentinel helpers.
 - `test/deepgram-core.test.js`: listen URL, message parsing, the interim/final assembler (`speech_final`, `UtteranceEnd`, length cuts, `Finalize` flushes), error/close classification, backoff and KeepAlive/Finalize timing, PCM frame validation.

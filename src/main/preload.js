@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('assistant', {
   onAiChunk: (cb) => ipcRenderer.on('ai:chunk', (_e, payload) => cb(payload)),
   summarizeSession: (transcript) => ipcRenderer.invoke('ai:summarize', { transcript }),
   exportSummary: (content) => ipcRenderer.invoke('summary:export', { content }),
+  // Forget the in-memory interview session state (threads, facts) in main.
+  resetInterviewSession: () => ipcRenderer.invoke('session:reset'),
   getConfigStatus: () => ipcRenderer.invoke('config:status'),
   getPrivacyStatus: () => ipcRenderer.invoke('privacy:status'),
 

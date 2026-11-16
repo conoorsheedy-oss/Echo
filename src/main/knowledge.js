@@ -124,19 +124,30 @@ function loadKnowledgeBase() {
 // Score is normalized by chunk length (sqrt) so a long chunk doesn't
 // automatically outscore a short, precise one purely by containing more
 // words overall.
-function searchKnowledge(query, topK = 4) {
+//
+// opts.prefer (optional, used by interview follow-ups): [{ source, index }]
+// chunks already used for the same interview thread. They get a
+// PREFER_BOOST on their score, but only when they still match the query
+// (score > 0), and the result is still the top K overall. Without opts the
+// ranking is exactly as before.
+const PREFER_BOOST = 1.5;
+function searchKnowledge(query, topK = 4, opts = undefined) {
   if (!chunks.length || !query) return [];
 
   const queryCounts = {};
   for (const t of tokenize(query)) queryCounts[t] = (queryCounts[t] || 0) + 1;
   if (!Object.keys(queryCounts).length) return [];
 
+  const prefer = opts && Array.isArray(opts.prefer) ? opts.prefer : [];
+  const isPreferred = (c) => prefer.some((p) => p && p.source === c.source && p.index === c.index);
+
   const scored = chunks.map((c) => {
     let overlap = 0;
     for (const t of c.tokens) {
       if (queryCounts[t]) overlap += queryCounts[t];
     }
-    const score = c.tokens.length ? overlap / Math.sqrt(c.tokens.length) : 0;
+    let score = c.tokens.length ? overlap / Math.sqrt(c.tokens.length) : 0;
+    if (score > 0 && prefer.length && isPreferred(c)) score *= PREFER_BOOST;
     return { ...c, score };
   });
 

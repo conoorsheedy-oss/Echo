@@ -627,6 +627,7 @@ function autoTriggerDecision(text) {
 
 // Diagnostics only: why the last "Them" line did or didn't fire.
 let lastAutoNote = 'nothing yet';
+let lastThreadNote = 'none yet'; // Diagnostics: the interview thread of the last answer (main's session state)
 function noteAutoTrigger(decision) {
   const { intent } = decision;
   lastAutoNote = decision.trigger
@@ -746,6 +747,15 @@ function clearTranscript() {
   lastThemChunk = null;
   answerHistory.length = 0;
   clearPendingAnswer();
+  resetInterviewSession();
+}
+
+// Main keeps the interview's thread / fact state in memory for the current
+// listening session; Stop and Clear transcript drop it.
+function resetInterviewSession() {
+  lastThreadNote = 'none yet';
+  if (typeof api.resetInterviewSession !== 'function') return;
+  api.resetInterviewSession().catch((err) => console.warn('Could not reset the interview session:', err.message));
 }
 
 // The WHOLE session goes with every request (ai.js trims the prompt copy to
@@ -1756,6 +1766,7 @@ async function stopListening() {
 
   micIndicator.classList.remove('active', 'speaking');
   systemIndicator.classList.remove('active', 'speaking');
+  resetInterviewSession();
 }
 
 listenBtn.addEventListener('click', () => {
@@ -2519,6 +2530,7 @@ async function requestSuggestion(instruction, opts = {}) {
       return;
     }
     if (auto) lastAutoNote = `answered (${intentInfo.intent})`;
+    if (isObj && typeof result.thread === 'string' && result.thread) lastThreadNote = result.thread;
     noteFirstToken(req); // no-op if it streamed; times a non-streamed answer
     // ai:suggest resolves { text, groundingFiles } -- the full answer, which
     // also replaces whatever was streamed (it's authoritative if streaming
@@ -2785,6 +2797,7 @@ function renderDiagnostics() {
     ['Audio chunks', describeChunking()],
     ['Speech end → first answer word', describeLatency()],
     ['Last auto trigger', lastAutoNote],
+    ['Thread', lastThreadNote],
     ['Last answer timing', describeTimingSplit()],
     ['Instant first line', instantHeadlineEnabled() ? 'on' : 'off'],
     ['Privacy mode', privacyModeEnabled ? 'on' : 'off'],

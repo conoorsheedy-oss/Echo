@@ -31,6 +31,7 @@ const knowledge = require('./knowledge');
 const { createRequestRegistry } = require('./ai-requests');
 const { runSuggestion } = require('./suggest-pipeline');
 const { createDeepgramManager } = require('./deepgram');
+const interviewSession = require('./interview-session');
 
 // Optional Deepgram live speech-to-text (Settings > Speech-to-text). The
 // sockets live here so the key never reaches the renderer (deepgram.js).
@@ -55,16 +56,45 @@ process.on('unhandledRejection', (reason) => {
 // Loaded once at startup; reloaded on demand via the "Reload" button in the app.
 let knowledgeStatus = knowledge.loadKnowledgeBase();
 
-// Best-effort guess at "what's actually being asked right now" to search the
-// knowledge base with — the last transcript line, falling back to the tail
-// of the whole transcript.
-function extractSearchQuery(transcript) {
-  if (!transcript) return '';
-  const lines = transcript.trim().split('\n').filter(Boolean);
-  if (!lines.length) return '';
-  const lastLine = lines[lines.length - 1];
-  const colonIdx = lastLine.indexOf(':');
-  return colonIdx !== -1 ? lastLine.slice(colonIdx + 1).trim() : lastLine.trim();
+// Interview session state (interview-session.js): the question / thread log,
+// follow-up linking, pinned facts and confirmed details for the current
+// listening session. Memory only: never written to disk, cleared on Stop /
+// Clear transcript (session:reset) and gone on quit. Phase 2a only uses it
+// for the knowledge-base (CV) query; the answer prompts are unchanged.
+const liveInterview = interviewSession.createSession();
+
+// The knowledge query for one ai:suggest request. Any failure in the session
+// layer falls back to the old query (question || instruction || last line),
+// so it can never break an answer.
+function planKnowledge({ transcript, question, instruction, mode }) {
+  try {
+    return interviewSession.planKnowledgeSearch(liveInterview, { transcript, question, instruction, mode });
+  } catch (err) {
+    console.warn('[session] Knowledge plan failed, using the plain query:', err && err.message);
+    // Don't keep half-ingested state: the next request rebuilds it from the transcript.
+    try { interviewSession.resetSession(liveInterview); } catch (e) { /* nothing more to do */ }
+    return { query: interviewSession.legacySearchQuery({ question, instruction, transcript }), prefer: [], label: '', generation: null };
+  }
+}
+
+// After an answer finished: log Echo's suggestion (per-detail confirmation
+// happens later, from the candidate's own lines). Never throws.
+function noteSuggestion(plan, requestId, question, result, knowledgeSnippets) {
+  if (!plan || plan.generation === null || !result || typeof result !== 'object' || result.skipped || result.noResponse) return;
+  try {
+    interviewSession.recordSuggestion(liveInterview, {
+      requestId,
+      questionId: plan.questionId,
+      threadId: plan.threadId,
+      question,
+      text: result.text,
+      knowledgeSources: knowledgeSnippets,
+      afterLine: plan.afterLine,
+      generation: plan.generation,
+    });
+  } catch (err) {
+    console.warn('[session] Could not record the suggestion:', err && err.message);
+  }
 }
 
 const DEFAULT_BOUNDS = { width: 480, height: 760 };
@@ -874,9 +904,15 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
 
   const req = aiRequests.start('suggest', id, requestKind);
   try {
-    const query = question || instruction || extractSearchQuery(transcript);
-    const knowledgeSnippets = knowledge.searchKnowledge(query);
-    return await runSuggestion({
+    // Ingest the transcript, link the question to its thread and build the
+    // knowledge query (synchronous, no API calls). Interview follow-ups also
+    // search with the thread's original question and what the candidate
+    // said, and prefer snippets already used for that thread.
+    const plan = planKnowledge({ transcript, question, instruction, mode: safeMode });
+    const knowledgeSnippets = plan.prefer && plan.prefer.length
+      ? knowledge.searchKnowledge(plan.query, undefined, { prefer: plan.prefer })
+      : knowledge.searchKnowledge(plan.query);
+    const result = await runSuggestion({
       ai,
       params: {
         transcript,
@@ -896,9 +932,18 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
       emit: partForwarder(evt, id),
       headline: headline === true,
     });
+    noteSuggestion(plan, id, question, result, knowledgeSnippets);
+    // Diagnostics only (renderer: "Thread" row); the answer is unchanged.
+    return result && typeof result === 'object' && plan.label ? { ...result, thread: plan.label } : result;
   } finally {
     req.done();
   }
+});
+
+// Stop listening / Clear transcript: forget the interview session state.
+handle('session:reset', async () => {
+  interviewSession.resetSession(liveInterview);
+  return { ok: true };
 });
 
 handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAnswers, quality, images } = {}) => {
