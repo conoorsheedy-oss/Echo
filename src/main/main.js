@@ -32,6 +32,8 @@ const { createRequestRegistry } = require('./ai-requests');
 const { runSuggestion } = require('./suggest-pipeline');
 const { createDeepgramManager } = require('./deepgram');
 const interviewSession = require('./interview-session');
+const { createBriefStore } = require('./brief-store');
+const interviewBrief = require('./interview-brief');
 
 // Optional Deepgram live speech-to-text (Settings > Speech-to-text). The
 // sockets live here so the key never reaches the renderer (deepgram.js).
@@ -114,6 +116,31 @@ function noteSuggestion(plan, requestId, question, result, knowledgeSnippets) {
     });
   } catch (err) {
     console.warn('[session] Could not record the suggestion:', err && err.message);
+  }
+}
+
+// Interview brief (Brief drawer): company and role, job ad, interview type,
+// notes -- all optional. Saved in userData; a long job ad is condensed once
+// (ai.summarizeJobAd). Interview mode only: an empty brief changes nothing.
+const briefStore = createBriefStore({
+  file: path.join(app.getPath('userData'), 'interview-brief.json'),
+  summarize: (opts) => ai.summarizeJobAd(opts),
+});
+
+// Behavioural questions: one extra CV snippet that fits the role
+// (interview-brief.js pickFitSnippet). Never throws.
+function addBriefFitSnippet(snippets, briefPlan, plan, params) {
+  if (!briefPlan) return { snippets, fit: '' };
+  try {
+    return interviewBrief.pickFitSnippet({
+      snippets,
+      keywords: briefPlan.keywords,
+      analysis: ai.analyzeSuggestion(params),
+      prefer: plan && plan.prefer,
+      search: (q, k) => knowledge.searchKnowledge(q, k),
+    });
+  } catch (err) {
+    return { snippets, fit: '' };
   }
 }
 
@@ -631,6 +658,9 @@ app.whenReady().then(async () => {
   createTray();
   registerShortcuts();
   started = true;
+  // A saved long job ad without a summary (no key last time, offline...):
+  // try once more now. Never blocks; until then the start of the ad is used.
+  briefStore.ensureSummary();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createOverlayWindow();
@@ -951,6 +981,15 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
     // Interview mode: thread state + Direction line (other modes: none).
     const state = planInterviewState(plan, params);
     if (state) params.interviewState = state;
+    // Interview mode: the brief, if the user filled one in.
+    let briefNote = '';
+    const briefPlan = safeMode === 'interview' ? briefStore.plan() : null;
+    if (briefPlan) {
+      params.brief = { block: briefPlan.block, headlineBlock: briefPlan.headlineBlock, type: briefPlan.type };
+      const fit = addBriefFitSnippet(knowledgeSnippets, briefPlan, plan, params);
+      if (fit.fit) params.knowledgeSnippets = fit.snippets;
+      briefNote = fit.fit ? `${briefPlan.diagnostic} · fit ${fit.fit}` : briefPlan.diagnostic;
+    }
     const result = await runSuggestion({
       ai,
       params,
@@ -959,14 +998,29 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
       emit: partForwarder(evt, id),
       headline: headline === true,
     });
-    noteSuggestion(plan, id, question, result, knowledgeSnippets);
+    noteSuggestion(plan, id, question, result, params.knowledgeSnippets);
     // Diagnostics only (renderer: "Thread" row); the answer is unchanged.
-    const threadNote = [plan.label, state ? state.diagnostic : ''].filter(Boolean).join(' · ');
+    const threadNote = [plan.label, state ? state.diagnostic : '', briefNote].filter(Boolean).join(' · ');
     return result && typeof result === 'object' && threadNote ? { ...result, thread: threadNote } : result;
   } finally {
     req.done();
   }
 });
+
+// ---- Interview brief (Brief drawer) ----
+function validateBriefPayload(payload) {
+  if (!payload || typeof payload !== 'object') throw new Error('Invalid brief.');
+  assertOptionalString(payload.companyRole, 'companyRole', interviewBrief.LIMITS.companyRole * 2);
+  assertOptionalString(payload.jobAd, 'jobAd', interviewBrief.LIMITS.jobAd * 2);
+  assertOptionalString(payload.notes, 'notes', interviewBrief.LIMITS.notes * 2);
+  assertOptionalString(payload.type, 'type', 40);
+  return payload;
+}
+const briefView = ({ pending, ...view }) => view;
+
+handle('brief:get', async () => briefView(briefStore.get()));
+handle('brief:set', async (_evt, payload) => briefView(briefStore.set(validateBriefPayload(payload))));
+handle('brief:clear', async () => briefView(briefStore.clear()));
 
 // Stop listening / Clear transcript: forget the interview session state.
 handle('session:reset', async () => {

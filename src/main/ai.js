@@ -13,6 +13,7 @@
 
 const keyStore = require('./keyStore');
 const deepgramCore = require('./deepgram-core');
+const interviewBrief = require('./interview-brief');
 const { humanizeAnswer, createStreamHumanizer } = require('./humanize');
 // Pure, shared with the renderer: intent detection, the technical-question
 // heuristics and the new-problem / follow-up classifier.
@@ -605,6 +606,7 @@ function latestHints({ mode, kind, intent, allowNoResponse }) {
 // Layout, built for Gemini's implicit (prefix) caching and for "the question
 // is never buried":
 //   [system instruction]                       identical for every request in a mode/style
+//   0. INTERVIEW BRIEF                         interview only, if the user filled one in: fixed all session
 //   1. FULL CONVERSATION SO FAR                append-only -> the long, stable prefix
 //   2. ANSWERS ALREADY GIVEN                   append-only
 //   3. background snippets (knowledge files)   re-ranked per question
@@ -621,9 +623,11 @@ function latestHints({ mode, kind, intent, allowNoResponse }) {
 // interview hints, as before).
 // stateBlock / direction: interview mode only (interviewStateFor()); absent
 // means the prompt is exactly what it was before Phase 2b.
-function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction }) {
+// briefBlock: interview mode only (briefFor()); absent = no brief, no change.
+function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock }) {
   const capped = capTranscript(transcript);
-  let context = `FULL CONVERSATION SO FAR (chronological, oldest first; "You" = the user, "Them" = the other side):\n\n${capped || '(no transcript yet)'}`;
+  let context = briefBlock ? `${briefBlock}\n\n` : '';
+  context += `FULL CONVERSATION SO FAR (chronological, oldest first; "You" = the user, "Them" = the other side):\n\n${capped || '(no transcript yet)'}`;
   context += buildPreviousAnswersBlock(previousAnswers);
   context += buildKnowledgeBlock(knowledgeSnippets);
   if (stateBlock) context += `\n\n${stateBlock}`;
@@ -1129,18 +1133,34 @@ function interviewStateFor(mode, state, { headline = false } = {}) {
   };
 }
 
+// The interview brief (main.js: interview-brief.js blocks, worked out once
+// per request): `block` for the full answer, `headlineBlock` (shorter) for
+// the first line, `type` for the thinking level. Interview mode only.
+function briefFor(mode, brief, { headline = false } = {}) {
+  if (mode !== 'interview' || !brief || typeof brief !== 'object') return { block: '', type: 'auto' };
+  const block = headline ? brief.headlineBlock : brief.block;
+  return {
+    block: typeof block === 'string' ? block : '',
+    type: interviewBrief.TYPES.includes(brief.type) ? brief.type : 'auto',
+  };
+}
+
 async function generateSuggestion(params) {
   const {
     transcript, instruction, question, previousAnswers, images, knowledgeSnippets, quality, answerStyle, signal, onChunk,
   } = params;
   const named = String(question || '').trim();
   const { mode, questionKind: kind, intent, allowNoResponse } = suggestionAnalysis(params);
-  const thinkingLevel = resolveThinkingLevel({ mode, quality, kind });
+  const { block: briefBlock, type: interviewType } = briefFor(mode, params.brief);
+  const thinkingLevel = interviewBrief.adjustThinkingLevel(
+    resolveThinkingLevel({ mode, quality, kind }),
+    { type: interviewType, kind, quality: normalizeQuality(quality) }
+  );
   const answerTokens = answerTokensFor(kind, instruction);
 
   const { block: stateBlock, direction } = interviewStateFor(mode, params.interviewState);
   const conversation = buildConversation({
-    transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction,
+    transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock,
   });
   const result = await callGemini({
     systemPrompt: buildSystemPrompt(mode, answerStyle),
@@ -1209,9 +1229,10 @@ function buildHeadlineSystemPrompt(mode) {
 // last couple of answers (they hold the code a follow-up is about) and the
 // knowledge snippets -- enough to say the right first sentence, small enough
 // to be quick.
-function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction }) {
+function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock }) {
   const recent = capTranscript(transcript, HEADLINE_TRANSCRIPT_CHARS);
-  let context = `RECENT CONVERSATION (oldest first; "You" = the user, "Them" = the other side):\n\n${recent || '(no transcript yet)'}`;
+  let context = briefBlock ? `${briefBlock}\n\n` : '';
+  context += `RECENT CONVERSATION (oldest first; "You" = the user, "Them" = the other side):\n\n${recent || '(no transcript yet)'}`;
   if (Array.isArray(previousAnswers) && previousAnswers.length) {
     const lastFew = previousAnswers.slice(-HEADLINE_PREVIOUS_ANSWERS)
       .map((a) => ({ ...a, text: clip(a.text, HEADLINE_PREVIOUS_ANSWER_CHARS) }));
@@ -1387,11 +1408,12 @@ async function generateHeadline(params) {
   const model = headlineModel();
   // Interview: the same state (trimmed) and the same Direction line as the full answer.
   const { block: stateBlock, direction } = interviewStateFor(mode, params.interviewState, { headline: true });
+  const { block: briefBlock } = briefFor(mode, params.brief, { headline: true });
   // Same prompt, context, intent and kind whichever model writes it.
   const req = {
     systemPrompt: buildHeadlineSystemPrompt(mode),
     parts: buildUserParts(buildHeadlineConversation({
-      transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction,
+      transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock,
     }), images),
     generationConfig: { temperature: 0.3 },
     thinkingLevel: 'minimal',
@@ -1446,6 +1468,54 @@ async function askFollowUp({
     onChunk: humanizedChunks(onChunk),
   });
   return withCutOffNote(humanizeResult(result));
+}
+
+// ---- Interview brief: job ad summary ----
+// One small call when the user saves a long job ad (main.js), on the
+// first-line model (Flash-Lite when available). Only the ad's own words:
+// it must never add facts, so the prompt forbids anything not in the text.
+const JOB_AD_SUMMARY_TIMEOUT_MS = 20_000;
+const JOB_AD_SUMMARY_SYSTEM_PROMPT = `You condense a job ad for an interview co-pilot. Use ONLY what the ad itself says: never add facts about the company, the team or the role that aren't written in it, and never guess.
+Write at most 5 short lines, plain text, no markdown, no intro, exactly these labels and skip any line the ad gives nothing for:
+Role: the job title and level, and the team or product area if named.
+Must-haves: the required skills, tools and experience, comma-separated.
+Nice-to-haves: the preferred or bonus ones, comma-separated.
+What they care about: values or ways of working the ad stresses, in a few words each.
+Likely topics: what an interviewer for this ad would most likely ask about, using the ad's own wording.
+Keep the whole thing under 600 characters.`;
+
+function cleanJobAdSummary(text) {
+  const lines = String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/^[\s>*#-]+/, '').replace(/\*\*/g, '').trim())
+    .filter(Boolean);
+  const joined = lines.join('\n');
+  const max = interviewBrief.AD_SUMMARY_MAX_CHARS;
+  return joined.length > max ? `${joined.slice(0, max - 1).trim()}…` : joined;
+}
+
+async function summarizeJobAd({ text, signal } = {}) {
+  const ad = String(text || '').trim();
+  if (!ad) return '';
+  const req = {
+    systemPrompt: JOB_AD_SUMMARY_SYSTEM_PROMPT,
+    parts: [{ text: `JOB AD (pasted by the user):\n\n${ad.slice(0, interviewBrief.LIMITS.jobAd)}` }],
+    thinkingLevel: 'low',
+    answerTokens: 300,
+    signal,
+    timeoutMs: JOB_AD_SUMMARY_TIMEOUT_MS,
+  };
+  const model = headlineModel();
+  let result;
+  try {
+    result = await callGemini({ ...req, model });
+  } catch (err) {
+    const main = geminiModel();
+    if (err.code !== 'MODEL_NOT_FOUND' || model === main || (signal && signal.aborted)) throw err;
+    result = await callGemini({ ...req, model: main });
+  }
+  return cleanJobAdSummary(result.text);
 }
 
 async function summarizeSession({ transcript }) {
@@ -1539,6 +1609,8 @@ module.exports = {
   generateHeadline,
   askFollowUp,
   summarizeSession,
+  summarizeJobAd,
+  briefFor,
   testKeys,
   testOne,
   groqModel,

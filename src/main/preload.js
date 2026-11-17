@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('assistant', {
   exportSummary: (content) => ipcRenderer.invoke('summary:export', { content }),
   // Forget the in-memory interview session state (threads, facts) in main.
   resetInterviewSession: () => ipcRenderer.invoke('session:reset'),
+  // Interview brief (all fields optional): { companyRole, jobAd, type, notes }.
+  // Returns { brief, summary, summaryStatus, empty, diagnostic }.
+  getBrief: () => ipcRenderer.invoke('brief:get'),
+  saveBrief: (brief) => ipcRenderer.invoke('brief:set', brief),
+  clearBrief: () => ipcRenderer.invoke('brief:clear'),
   getConfigStatus: () => ipcRenderer.invoke('config:status'),
   getPrivacyStatus: () => ipcRenderer.invoke('privacy:status'),
 

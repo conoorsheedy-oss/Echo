@@ -476,6 +476,7 @@ async function init() {
 init();
 refreshScreenSources();
 refreshKnowledgeStatus();
+refreshBrief();
 
 minimizeBtn.addEventListener('click', () => api.minimizeWindow());
 // × quits Echo completely (stopping any session first).
@@ -1187,6 +1188,91 @@ reloadKnowledgeBtn.addEventListener('click', async () => {
   } finally {
     reloadKnowledgeBtn.disabled = false;
   }
+});
+
+// ---- Interview brief (all optional; main.js / interview-brief.js) ----
+const briefForm = document.getElementById('brief-form');
+const briefCompanyRole = document.getElementById('brief-company-role');
+const briefType = document.getElementById('brief-type');
+const briefJobAd = document.getElementById('brief-job-ad');
+const briefNotes = document.getElementById('brief-notes');
+const briefStatusEl = document.getElementById('brief-status');
+const briefBadge = document.getElementById('brief-badge');
+const saveBriefBtn = document.getElementById('save-brief-btn');
+const clearBriefBtn = document.getElementById('clear-brief-btn');
+let briefPollTimer = null;
+
+function briefStatusText(view) {
+  if (!view || view.empty) return 'No brief: Echo answers as usual.';
+  const bits = ['Saved.'];
+  if (view.brief.jobAd) {
+    if (view.summaryStatus === 'pending') bits.push('Summarising the job ad…');
+    else if (view.summaryStatus === 'ready') bits.push('Job ad summarised.');
+    else if (view.summaryStatus === 'failed') bits.push("Couldn't summarise the job ad yet, so Echo uses the start of it.");
+  }
+  if (modeSelect.value !== 'interview') bits.push('Switch to Interview mode to use it.');
+  return bits.join(' ');
+}
+
+function renderBrief(view, { fillForm = false } = {}) {
+  if (!view) return;
+  if (fillForm) {
+    briefCompanyRole.value = view.brief.companyRole || '';
+    briefType.value = view.brief.type || 'auto';
+    briefJobAd.value = view.brief.jobAd || '';
+    briefNotes.value = view.brief.notes || '';
+  }
+  briefBadge.textContent = view.empty ? '' : '✓';
+  briefBadge.classList.toggle('hidden', !!view.empty);
+  briefStatusEl.textContent = briefStatusText(view);
+  clearTimeout(briefPollTimer);
+  // The summary runs in main; check back until it's done (it never takes long).
+  if (view.summaryStatus === 'pending') {
+    briefPollTimer = setTimeout(async () => {
+      try { renderBrief(await api.getBrief()); } catch (e) { /* keep the last status */ }
+    }, 1500);
+  }
+}
+
+async function refreshBrief() {
+  try {
+    renderBrief(await api.getBrief(), { fillForm: true });
+  } catch (err) {
+    briefStatusEl.textContent = 'Could not load the brief.';
+  }
+}
+
+briefForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  saveBriefBtn.disabled = true;
+  try {
+    const view = await api.saveBrief({
+      companyRole: briefCompanyRole.value,
+      type: briefType.value,
+      jobAd: briefJobAd.value,
+      notes: briefNotes.value,
+    });
+    renderBrief(view, { fillForm: true });
+    showToast(view.empty ? 'Brief cleared' : 'Brief saved');
+  } catch (err) {
+    briefStatusEl.textContent = 'Could not save the brief: ' + err.message;
+  } finally {
+    saveBriefBtn.disabled = false;
+  }
+});
+
+clearBriefBtn.addEventListener('click', async () => {
+  try {
+    renderBrief(await api.clearBrief(), { fillForm: true });
+    showToast('Brief cleared');
+  } catch (err) {
+    briefStatusEl.textContent = 'Could not clear the brief: ' + err.message;
+  }
+});
+
+modeSelect.addEventListener('change', () => {
+  if (!briefStatusEl.textContent) return;
+  api.getBrief().then((view) => renderBrief(view)).catch(() => {});
 });
 
 // ---- Screen capture (visual context, separate from audio) ----

@@ -77,6 +77,7 @@ The window has three parts: a slim **top bar**, the **answer card** (most of the
 - **Live transcript:** the conversation as `You:` / `Them:`. The dock icon counts new lines while the drawer is closed, and the Mic / System audio dots in its header glow while voice is detected.
 - **Ask the assistant:** a chat box for follow-up questions about the conversation.
 - **Knowledge base:** **Add files** to add your CV or notes (`.txt` / `.md`). Only the snippets that match a question are sent. The dock icon shows how many files are loaded.
+- **Interview brief:** before an interview, tell Echo whatever you have, all optional: company and role, the job ad, the interview type (Behavioural, Coding, System design, Recruiter / HR screen, Mixed, or Auto), and notes ("notice period 2 weeks", "they use Go"). Echo uses the ad to pick which of your real projects to talk about, answers "have you used X?" honestly when X isn't in your CV, never invents facts about the company, and treats your notes as your own facts. A long job ad is condensed once when you save it. Coding and system design rounds think a bit harder on follow-ups. Used in Interview mode only; leave it empty and nothing changes.
 - **Screen context:** pick which screen or window to capture and manage the screenshot tray. The dock icon shows how many screenshots are attached.
 - **Summarize** (`Ctrl+Shift+M`): summary, decisions, action items and open questions. Copy it or export it.
 - **Camera** (right end of the dock): one tap adds a screenshot to the tray. Up to **4 screenshots** go with your next answer or question. `Ctrl+Shift+S` captures and answers in one go.
@@ -174,13 +175,14 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 | Audio chunks (mic + system audio) | **Groq**, with your key | While listening (Speech-to-text = Groq, or as Deepgram's fallback) |
 | Live audio stream (mic + system audio, only while someone is talking) | **Deepgram** ([console.deepgram.com](https://console.deepgram.com)), with your key | While listening with Speech-to-text = Deepgram |
 | Transcript, your questions, matched knowledge snippets | **Google Gemini**, with your key | When an answer, chat reply or summary is requested |
+| Interview brief (company, role, job ad, notes) | **Google Gemini**, with your key | With Interview-mode answers, and the job ad once when you save it (to condense it) |
 | Screenshots in the tray | **Google Gemini**, with your key | With the next answer or question (never in Privacy Mode) |
 | Camera frames (gestures only) | **Nowhere**, processed locally | While gestures are on |
 | Anything | **An Echo server** | **Never.** There isn't one. |
 
 - **Keys** are encrypted with your OS keychain (Electron `safeStorage`) and stored only on your computer. The UI can save or remove a key but never read it back.
 - **Free-tier Gemini:** Google may use free-tier prompts and responses to improve its products. Use a paid (billing-enabled) key if that matters to you. See the [Gemini API terms](https://ai.google.dev/gemini-api/terms).
-- Transcripts and summaries stay in memory unless you export them.
+- Transcripts and summaries stay in memory unless you export them. The interview brief is saved on your computer (`interview-brief.json` in Echo's app data folder) until you clear it.
 
 ## Troubleshooting
 
@@ -237,6 +239,8 @@ src/
     suggest-pipeline.js  full answer + parallel instant first line
     keyStore.js    encrypted key storage (+ .env fallback)
     knowledge.js   keyword search over your notes
+    interview-session.js  interview threads, sources, state block (pure)
+    interview-brief.js, brief-store.js  the interview brief and where it's saved
     env.js         tiny .env loader
   renderer/      the overlay UI (no Node access)
     index.html, renderer.js, styles.css

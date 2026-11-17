@@ -2,6 +2,13 @@
 
 ## 0.2.0 – unreleased
 
+- **Interview brief.** A new dock drawer where you tell Echo what you have before an interview, all optional: company and role, the job ad, the interview type (Behavioural / Coding / System design / Recruiter-HR screen / Mixed / Auto) and notes. Interview mode only; an empty brief changes nothing.
+  - The ad steers which of your real projects Echo talks about; "have you used X?" gets an honest answer when X isn't in your CV; company facts only come from what you wrote (otherwise a `[placeholder]`). Notes are your own facts (`[From brief]`).
+  - A long job ad is condensed once on save (Flash-Lite, ad text only); until then Echo uses the start of it.
+  - Coding and system design rounds think at `medium` on technical follow-ups (Quality = Auto).
+  - Behavioural questions get one extra CV snippet that best matches the role.
+  - Saved locally in `interview-brief.json`; Diagnostics > Thread shows what's in use.
+
 - **Simpler, more natural voice prompt.** The "sound human" rules are now a short list of positive rules (copy the user's own "You" lines first, one idea at a time, no wrap-up, vary openers) with four question-shaped tone examples of different lengths, instead of a long list of don'ts with BEFORE/AFTER pairs that the model tended to imitate ("Honestly," on every answer). Facts still come only from the transcript or CV (TRUTH FIRST).
   - Gemini 3 models now run at their default temperature (Google's advice: lower values can cause looping); custom temperatures only apply to older models.
   - The first line no longer cuts at "e.g." / "i.e." / "vs." etc.

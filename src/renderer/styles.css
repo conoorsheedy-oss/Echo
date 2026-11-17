@@ -1364,6 +1364,67 @@ option {
   border-radius: var(--r-md);
 }
 
+/* Interview brief */
+.brief-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-6) var(--sp-6);
+}
+.brief-intro,
+.brief-status {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.brief-status:empty { display: none; }
+.brief-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.brief-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.brief-hint {
+  font-weight: 400;
+  color: var(--text-subtle);
+  margin-left: var(--sp-2);
+}
+.brief-field input,
+.brief-field select { width: 100%; min-width: 0; }
+.brief-field textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  min-height: 64px;
+  max-height: 240px;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text);
+  padding: 7px var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+}
+.brief-field textarea:hover { border-color: var(--border-strong); }
+.brief-field textarea:focus {
+  outline: none;
+  background: var(--surface-2);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.brief-field textarea::placeholder { color: var(--text-subtle); opacity: 1; }
+
 #knowledge-status {
   padding: var(--sp-6);
   font-size: var(--fs-sm);
@@ -2260,7 +2321,8 @@ input[type="range"].range:disabled { cursor: not-allowed; opacity: 0.5; }
 html[data-see-through] #app,
 html[data-see-through] #app button,
 html[data-see-through] #app select,
-html[data-see-through] #app input {
+html[data-see-through] #app input,
+html[data-see-through] #app textarea {
   text-shadow: var(--text-halo);
 }
 html[data-see-through] #app .icon {

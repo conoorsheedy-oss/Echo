@@ -41,6 +41,7 @@
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
       <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5.5M6.5 11L12 5.5l5.5 5.5"/></symbol>
+      <symbol id="i-brief" viewBox="0 0 24 24"><rect x="3.5" y="7.5" width="17" height="12" rx="2.5"/><path d="M9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5M3.5 12.5h17M11 12.5h2"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></symbol>
     </defs>
   </svg>
@@ -157,6 +158,40 @@
         </div>
       </section>
 
+      <section id="brief-section" class="drawer hidden" aria-labelledby="brief-title">
+        <div class="drawer-head">
+          <h2 class="drawer-title" id="brief-title"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-brief"/></svg>Interview brief</h2>
+          <button id="clear-brief-btn" type="button" class="icon-btn" aria-label="Clear the brief" title="Clear the brief"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-trash"/></svg></button>
+          <button type="button" class="icon-btn drawer-close" aria-label="Close" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
+        </div>
+        <form id="brief-form" class="brief-body" autocomplete="off">
+          <p class="brief-intro">All optional: fill in whatever you have. Used in Interview mode.</p>
+          <label class="brief-field"><span class="brief-label">Company and role</span>
+            <input id="brief-company-role" type="text" maxlength="200" placeholder="e.g. Stripe, software engineer intern" spellcheck="false" />
+          </label>
+          <label class="brief-field"><span class="brief-label">Interview type</span>
+            <select id="brief-type">
+              <option value="auto">Auto (work it out from the questions)</option>
+              <option value="behavioural">Behavioural</option>
+              <option value="coding">Coding</option>
+              <option value="system_design">System design</option>
+              <option value="hr_screen">Recruiter / HR screen</option>
+              <option value="mixed">Mixed</option>
+            </select>
+          </label>
+          <label class="brief-field"><span class="brief-label">Job ad <span class="brief-hint">paste the description</span></span>
+            <textarea id="brief-job-ad" rows="4" maxlength="12000" placeholder="Paste the job description. Echo uses it to pick which of your real projects to talk about."></textarea>
+          </label>
+          <label class="brief-field"><span class="brief-label">Notes <span class="brief-hint">facts Echo can say as yours</span></span>
+            <textarea id="brief-notes" rows="3" maxlength="2000" placeholder="e.g. Notice period: 2 weeks. Second round, the first was LeetCode. They use Go."></textarea>
+          </label>
+          <p id="brief-status" class="brief-status" aria-live="polite"></p>
+        </form>
+        <div class="drawer-actions">
+          <button id="save-brief-btn" type="submit" form="brief-form" class="primary">Save brief</button>
+        </div>
+      </section>
+
       <section id="screen-section" class="drawer drawer-auto hidden" aria-labelledby="screen-title">
         <div class="drawer-head">
           <h2 class="drawer-title" id="screen-title"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-screen"/></svg>Screen context</h2>
@@ -186,6 +221,7 @@
       <button type="button" class="dock-btn" data-drawer="transcript-section" aria-expanded="false" aria-controls="transcript-section" aria-label="Live transcript" title="Live transcript"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-list"/></svg><span id="transcript-badge" class="dock-badge hidden" aria-hidden="true"></span></button>
       <button type="button" class="dock-btn" data-drawer="chat-section" aria-expanded="false" aria-controls="chat-section" aria-label="Ask the assistant" title="Ask the assistant a question"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-chat"/></svg></button>
       <button type="button" class="dock-btn" data-drawer="knowledge-section" aria-expanded="false" aria-controls="knowledge-section" aria-label="Knowledge base" title="Knowledge base: your CV and notes"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-doc"/></svg><span id="knowledge-badge" class="dock-badge quiet hidden" aria-hidden="true"></span></button>
+      <button type="button" class="dock-btn" data-drawer="brief-section" aria-expanded="false" aria-controls="brief-section" aria-label="Interview brief" title="Interview brief: company, role, job ad, interview type (all optional)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-brief"/></svg><span id="brief-badge" class="dock-badge quiet hidden" aria-hidden="true"></span></button>
       <button type="button" class="dock-btn" data-drawer="screen-section" aria-expanded="false" aria-controls="screen-section" aria-label="Screen context" title="Screen context: attached screenshots and which screen to capture"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-screen"/></svg><span id="screen-badge" class="dock-badge hidden" aria-hidden="true"></span></button>
       <button id="summarize-btn" type="button" class="dock-btn" aria-label="Summarize this session" title="Summarize this session (Ctrl+Shift+M)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-summary"/></svg></button>
       <span class="dock-sep" aria-hidden="true"></span>
