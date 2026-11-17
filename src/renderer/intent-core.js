@@ -132,7 +132,7 @@
   // Plain words that, after a technical answer, still point at the code.
   // Also the words of a technical follow-up that don't look technical on
   // their own ("what is the complexity of that?", "any trade-offs?").
-  const CODE_REFERENCE_RE = /\b(inputs?|outputs?|returns?|pairs?|elements?|values?|null|empty|duplicates?|negative|overflow|memory|loops?|index|indices|complexit(?:y|ies)|big[- ]?o|runtime|(?:edge|corner) cases?|trade-?offs?|test cases?|unit tests?|(your|the|this|that)( current)? (code|solution|approach|function|implementation|algorithm|method))\b/i;
+  const CODE_REFERENCE_RE = /\b(inputs?|outputs?|returns?|pairs?|elements?|values?|null|empty|duplicates?|negative|overflow|memory|loops?|index|indices|complexit(?:y|ies)|big[- ]?o|runtime|(?:edge|corner) cases?|trade-?offs?|test cases?|unit tests?|crash\w*|retr(?:y|ies|ied)|time ?outs?|concurren\w*|at the same time|simultaneous\w*|idempoten\w*|race conditions?|requests?|servers?|databases?|cache|fail(?:s|ed|ure)?|goes down|keys?|(your|the|this|that)( current)? (code|solution|approach|function|implementation|algorithm|method))\b/i;
   const FOLLOWUP_MAX_WORDS = 25; // a short question that references earlier work
   const LONG_PROBLEM_WORDS = 40; // a long technical prompt reads as a problem statement
 

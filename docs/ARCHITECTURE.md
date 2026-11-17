@@ -58,9 +58,9 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 | Answers | `ai:suggest`, `ai:ask`, `ai:summarize`, `summary:export`, `session:reset` | `ai:chunk` (`{ requestId, part: 'answer' \| 'headline', text }`) |
 | Keys | `keys:status`, `keys:save`, `keys:remove`, `keys:test`, `external:open` | |
 | Screen | `screen:list-sources`, `screen:capture` | |
-| Knowledge | `knowledge:status`, `knowledge:reload`, `knowledge:open-folder`, `knowledge:add-files` | |
+| Knowledge | `knowledge:status`, `knowledge:reload`, `knowledge:open-folder`, `knowledge:add-files`, `knowledge:add-story` | |
 | Brief | `brief:get`, `brief:set`, `brief:clear` | |
-| Stories | `stories:status`, `stories:set-enabled`, `stories:rebuild` | |
+| Stories | `stories:status`, `stories:set-enabled`, `stories:rebuild`, `stories:decide-draft` | |
 | Window | `window:set-compact`, `window:hide` (send), `window:minimize` (send) | `window:compact-changed`, `window:visibility-changed` |
 | Privacy | `privacy:status`, `content-protection:status`, `content-protection:toggle` | `hotkey:privacy-mode-changed`, `hotkey:content-protection-changed` |
 | Gestures | `gestures:set-enabled`, `gestures:status`, `gestures:load-model` | |
@@ -260,6 +260,8 @@ The Brief drawer (dock) holds an optional brief: company and role, job ad, inter
 - themes are limited to a fixed list; at most 10 stories.
 
 If the question asks for a strict theme (conflict, failure, leadership, pressure, ambiguity, customer) and none of the picked stories has it, the block adds a rule not to bend a story into that theme ([placeholders] instead). The told story is returned as `result.story` and shown under the answer (`Your story: … (file)`).
+
+**Story ideas (drafts):** the same extraction call returns up to 8 `drafts` (`title`, `basis`, `idea`, `themes`) for themes the stories don't cover. `verifyDrafts()` keeps one only if its basis is word for word in the files, the idea adds no number that isn't there, and it has a known theme; its key is a hash of title + basis, stable across rebuilds. `pickDraft()` offers one only when a behavioural question's theme isn't covered by any confirmed story and the user hasn't decided on it. It goes to the renderer as `result.storyDraft` (shown dashed on the answer card), never into the prompt. `stories:decide-draft`: `happened` / `similar` (edited text) append to `my-stories.md` via `knowledge.addStory` and rebuild; `no` is remembered in `story-bank.json` (`decisions`).
 
 Use (Interview mode, a NEW behavioural question: `behavioural_question` + `general`, a named question, no instruction, not a thread follow-up): `pickStories()` ranks by theme words in the question (+3 per match), the question's own words (≤3), the brief's role keywords (≤2) and +1 if not yet told this session / −2.5 if told. The top 2 go in a `STORY BANK` block after the knowledge snippets (≤1600 chars; it replaces the "no background" note when no snippet matched); the first line gets one line with the top story. After the answer, `storyToldIn()` finds which story it told (≥3 shared title/quote words) and marks it used for the session (cleared on `session:reset`). Switched off: nothing is sent, nothing is used. Diagnostics > Thread: `stories S2, S3 (told S2)`.
 

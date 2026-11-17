@@ -13,6 +13,9 @@ const SB = require('./story-bank');
 function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
   let enabled = true;
   let stories = [];
+  let drafts = []; // ideas to confirm (story-bank.js verifyDrafts)
+  // draft key -> 'confirmed' | 'rejected': never offered again, across rebuilds.
+  let decisions = {};
   let forDocs = '';
   let status = 'empty'; // empty | off | building | ready | failed | none_found
   let lastError = '';
@@ -22,7 +25,7 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
 
   function save() {
     try {
-      fs.writeFileSync(file, JSON.stringify({ version: 1, enabled, forDocs, stories }, null, 1));
+      fs.writeFileSync(file, JSON.stringify({ version: 1, enabled, forDocs, stories, drafts, decisions }, null, 1));
     } catch (err) {
       log.warn('[stories] Could not save the story bank:', err && err.message);
     }
@@ -36,9 +39,13 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
       // Re-check what was saved against nothing but its own shape (the files
       // are re-checked on the next rebuild if they changed).
       stories = Array.isArray(data.stories) ? data.stories.filter((s) => s && typeof s.id === 'string' && typeof s.title === 'string' && Array.isArray(s.quotes)) : [];
+      drafts = Array.isArray(data.drafts) ? data.drafts.filter((d) => d && typeof d.key === 'string' && typeof d.idea === 'string' && Array.isArray(d.themes)) : [];
+      decisions = data.decisions && typeof data.decisions === 'object' ? data.decisions : {};
     } catch (err) {
       enabled = true;
       stories = [];
+      drafts = [];
+      decisions = {};
       forDocs = '';
     }
     status = !enabled ? 'off' : stories.length ? 'ready' : forDocs ? 'none_found' : 'empty';
@@ -52,6 +59,7 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
       if (inFlight) inFlight.abort();
       inFlight = null;
       stories = [];
+      drafts = [];
       forDocs = '';
       status = 'empty';
       save();
@@ -71,6 +79,7 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
         const { stories: checked, dropped } = SB.verifyStories(raw, docs);
         if (dropped) log.warn(`[stories] Dropped ${dropped} stor${dropped === 1 ? 'y' : 'ies'} that didn't match the files word for word.`);
         stories = checked;
+        drafts = SB.verifyDrafts(raw, docs);
         forDocs = hash;
         status = checked.length ? 'ready' : 'none_found';
         used.clear();
@@ -93,6 +102,7 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
       if (inFlight) inFlight.abort();
       inFlight = null;
       stories = [];
+      drafts = [];
       forDocs = '';
       used.clear();
       status = 'off';
@@ -111,7 +121,37 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
       error: lastError,
       count: stories.length,
       stories: stories.map((s) => ({ id: s.id, title: s.title, source: s.source, themes: s.themes })),
+      // Ideas still waiting for "it happened / something like it / didn't happen".
+      drafts: openDrafts().map(draftView),
     };
+  }
+
+  function decidedKeys() {
+    return new Set(Object.keys(decisions));
+  }
+  function openDrafts() {
+    return enabled ? drafts.filter((d) => !decisions[d.key]) : [];
+  }
+  function draftView(d) {
+    return { key: d.key, title: d.title, idea: d.idea, basis: d.basis, source: d.source, themes: d.themes };
+  }
+
+  // A behavioural question with no confirmed story for its theme: an idea
+  // for the answer card (never put into the answer itself).
+  function draftFor({ question } = {}) {
+    if (!enabled) return null;
+    const d = SB.pickDraft(drafts, { question, stories, decided: decidedKeys() });
+    return d ? draftView(d) : null;
+  }
+
+  // decision: 'confirmed' | 'rejected'. A confirmed draft is saved as a real
+  // story by the caller (knowledge.addStory), which rebuilds the bank.
+  function decideDraft(key, decision) {
+    const d = drafts.find((x) => x.key === key);
+    if (!d || (decision !== 'confirmed' && decision !== 'rejected')) return null;
+    decisions[key] = decision;
+    save();
+    return draftView(d);
   }
 
   // For one NEW behavioural question: the picked stories and their blocks.
@@ -140,7 +180,7 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
   }
 
   load();
-  return { get: view, rebuild, setEnabled, plan, noteAnswer, resetSession, _used: used };
+  return { get: view, rebuild, setEnabled, plan, noteAnswer, resetSession, draftFor, decideDraft, _used: used };
 }
 
 module.exports = { createStoryStore };

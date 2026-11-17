@@ -184,6 +184,7 @@ function addBriefFitSnippet(snippets, briefPlan, plan, params) {
       analysis: ai.analyzeSuggestion(params),
       prefer: plan && plan.prefer,
       search: (q, k) => knowledge.searchKnowledge(q, k),
+      company: briefPlan.company,
     });
   } catch (err) {
     return { snippets, fit: '' };
@@ -1043,6 +1044,12 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
     try { analysis = safeMode === 'interview' ? ai.analyzeSuggestion(params) : null; } catch (err) { analysis = null; }
     const storyPlan = planStories({ params, plan, analysis, briefPlan });
     if (storyPlan) params.stories = { block: storyPlan.block, headlineLine: storyPlan.headlineLine };
+    // No confirmed story for this theme: an idea from the user's projects for
+    // the answer card, to confirm or reject. Never given to the answer itself.
+    let storyDraft = null;
+    if (safeMode === 'interview' && analysis && analysis.intent === 'behavioural_question' && params.question && !params.instruction) {
+      try { storyDraft = storyStore.draftFor({ question: params.question }); } catch (err) { storyDraft = null; }
+    }
     const result = await runSuggestion({
       ai,
       params,
@@ -1063,7 +1070,7 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
     // Diagnostics only (renderer: "Thread" row); the answer is unchanged.
     const threadNote = [plan.label, state ? state.diagnostic : '', briefNote, storyNote].filter(Boolean).join(' · ');
     if (!result || typeof result !== 'object') return result;
-    return { ...result, ...(threadNote ? { thread: threadNote } : {}), ...(toldStory ? { story: toldStory } : {}) };
+    return { ...result, ...(threadNote ? { thread: threadNote } : {}), ...(toldStory ? { story: toldStory } : {}), ...(storyDraft ? { storyDraft } : {}) };
   } finally {
     req.done();
   }
@@ -1098,6 +1105,28 @@ handle('stories:set-enabled', async (_evt, { enabled } = {}) => {
   if (typeof enabled !== 'boolean') throw new Error('Invalid value.');
   return storyView(storyStore.setEnabled(enabled));
 });
+// A story idea (draft): 'happened' saves it as is, 'similar' saves the
+// user's corrected text, 'no' never offers it again. Saved stories go to
+// my-stories.md and into the story bank.
+handle('stories:decide-draft', async (_evt, { key, decision, text } = {}) => {
+  if (typeof key !== 'string' || !/^[0-9a-f]{16}$/.test(key)) throw new Error('Invalid story idea.');
+  if (!['happened', 'similar', 'no'].includes(decision)) throw new Error('Invalid choice.');
+  assertOptionalString(text, 'text', 6000);
+  if (decision === 'no') {
+    if (!storyStore.decideDraft(key, 'rejected')) throw new Error('That story idea is no longer there.');
+    return storyView(storyStore.get());
+  }
+  const draft = (storyStore.get().drafts || []).find((d) => d.key === key);
+  if (!draft) throw new Error('That story idea is no longer there.');
+  const body = decision === 'similar' ? String(text || '').trim() : draft.idea;
+  if (!body) throw new Error('Write what actually happened first.');
+  knowledge.addStory({ title: draft.title, text: body });
+  storyStore.decideDraft(key, 'confirmed');
+  knowledgeStatus = knowledge.loadKnowledgeBase();
+  storyStore.rebuild();
+  return { ...storyView(storyStore.get()), knowledge: knowledgeStatus };
+});
+
 handle('stories:rebuild', async () => {
   storyStore.rebuild({ force: true });
   return storyView(storyStore.get());
@@ -1225,6 +1254,15 @@ handle('knowledge:reload', async () => {
   knowledgeStatus = knowledge.loadKnowledgeBase();
   storyStore.rebuild(); // only if the files changed
   return knowledgeStatus;
+});
+
+handle('knowledge:add-story', async (_evt, { title, text } = {}) => {
+  assertOptionalString(title, 'title', 200);
+  assertOptionalString(text, 'text', 6000);
+  const file = knowledge.addStory({ title, text });
+  knowledgeStatus = knowledge.loadKnowledgeBase();
+  storyStore.rebuild(); // the new story goes into the story bank
+  return { file, status: knowledgeStatus };
 });
 
 handle('knowledge:open-folder', async () => {

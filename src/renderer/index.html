@@ -109,6 +109,7 @@
         </div>
         <div id="suggestion-text" class="hidden"></div>
         <div id="suggestion-grounding" class="hidden"></div>
+        <div id="suggestion-story-draft" class="hidden" aria-live="polite"></div>
       </div>
       <div id="suggestion-actions" class="hidden" role="toolbar" aria-label="Answer actions">
         <button type="button" class="tool-btn" data-action="shorten" aria-label="Shorten" title="Shorten: rewrite it in 1-2 sentences"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-shorter"/></svg></button>
@@ -159,6 +160,19 @@
           </label>
           <p id="story-bank-status" class="brief-status" aria-live="polite"></p>
           <ul id="story-bank-list" class="story-list hidden" aria-label="Stories found in your files"></ul>
+          <div id="story-drafts" class="story-drafts hidden" aria-label="Story ideas to confirm"></div>
+          <details id="add-story" class="add-story">
+            <summary>Add a real story</summary>
+            <form id="add-story-form" class="brief-body add-story-form" autocomplete="off">
+              <label class="brief-field"><span class="brief-label">Title</span>
+                <input id="add-story-title" type="text" maxlength="100" placeholder="e.g. Disagreeing with my supervisor about auto-passing tests" />
+              </label>
+              <label class="brief-field"><span class="brief-label">What happened <span class="brief-hint">the situation, what you did, the result; only true details</span></span>
+                <textarea id="add-story-text" rows="4" maxlength="3000" placeholder="A few plain lines. Echo only ever uses what you write here."></textarea>
+              </label>
+              <button id="add-story-btn" type="submit" class="soft">Save story</button>
+            </form>
+          </details>
         </div>
         <div class="drawer-actions">
           <button id="add-knowledge-files-btn" type="button" class="soft" title="Add .txt/.md files (CV, notes)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg><span class="btn-label">Add files</span></button>

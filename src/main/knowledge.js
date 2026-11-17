@@ -173,9 +173,25 @@ function getStatus() {
   };
 }
 
+// "Add a real story" (Knowledge drawer): appended to my-stories.md in the
+// knowledge folder as a "## title" section, so it's searched like any other
+// file and the story bank picks it up. The user can edit the file later.
+const STORIES_FILE = 'my-stories.md';
+function addStory({ title, text }) {
+  ensureKnowledgeDir();
+  const t = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const body = String(text || '').replace(/\r\n?/g, '\n').trim().slice(0, 3000);
+  if (!body) throw new Error('Write the story first.');
+  const file = path.join(KNOWLEDGE_DIR, STORIES_FILE);
+  const exists = fs.existsSync(file);
+  const head = exists ? '' : '# My stories\n\nReal stories, written by me. Echo uses them for behavioural questions.\n';
+  fs.appendFileSync(file, `${head}\n## ${t || 'Story'}\n\n${body}\n`, 'utf-8');
+  return STORIES_FILE;
+}
+
 // The loaded files' full text (story-store.js builds the story bank from it).
 function getDocuments() {
   return documents.map((d) => ({ ...d }));
 }
 
-module.exports = { loadKnowledgeBase, searchKnowledge, getStatus, getDocuments, KNOWLEDGE_DIR };
+module.exports = { loadKnowledgeBase, searchKnowledge, getStatus, getDocuments, addStory, KNOWLEDGE_DIR };

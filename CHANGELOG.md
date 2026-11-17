@@ -2,6 +2,19 @@
 
 ## 0.2.0 – unreleased
 
+- **Story builder.** When Echo builds your story bank it also drafts story *ideas* from your project details (a failover feature -> something broke; a fixed bug -> a mistake you caught), one per theme your real stories don't cover. Each is tied to an exact line from your files and adds no numbers. In Interview mode, a behavioural question with no matching story shows the idea on the answer card, dashed and marked "not confirmed", with **It happened** / **Something like it** (fix it first) / **Didn't happen**. The answer itself never uses an unconfirmed idea. Confirmed ones are saved to `my-stories.md` and become real stories; rejected ones never come back. The same ideas are listed in the Knowledge drawer to go through before an interview.
+
+- **Engage before coding.** A new coding or design problem now opens with one short clarifying question for you to ask (input size, an edge case, the time complexity they want, or for design the scale), about something the problem doesn't already say; the approach, walk-through and code follow for when they answer. The instant first line is that question too.
+- **Commented code:** short comments on the key lines (about 3-6), not on every line.
+- **Compact but specific:** fewer words, more concrete detail.
+
+- **Fixes from the second mock interview.**
+  - **No code read aloud.** Spoken lines never contain identifiers, underscores, brackets or quotes; code is named in plain words ("a set of the IDs I've seen") and only appears inside the code block.
+  - **Failure-case follow-ups** (a crash, a retry, two requests at once) get a proper answer: what's written before the risky step, how it recovers, what stops duplicates. They're detected as follow-ups after a design or coding answer and think at `medium`.
+  - **"Why this company?"** leads with your own real connection to it. A CV line that names the company (e.g. you integrated Stripe) is added to the background when the brief names that company.
+  - **Stories:** about 30 seconds, the technical choice in the first line, and your own part made explicit ("I did X; my lead did Y"). Numbers are never mixed between places.
+  - **Add a real story** (Knowledge drawer): write a true story in a few lines; it's saved to `my-stories.md` in your knowledge folder and goes into the story bank, so you tell the same story every time.
+
 - **Fixes from a mock-interview review.**
   - **Your terms are heard right.** Names and specs from your knowledge files and brief (e.g. `NIST SP 800-22`, `PayDai`, `FastAPI`) go to Deepgram Nova-3 as keyterms and to Groq Whisper as a short prompt, so they're transcribed correctly. Only the terms are sent, never sentences. A Whisper transcript of the prompt itself (over silence) is dropped. Answers are also told to use the right term when the transcript garbles one ("SP 822" -> "SP 800-22").
   - **Easier to say, not read.** Script lines are under ~15 words, one idea each. Technical walk-throughs are 3-4 steps that each start with a **bold cue** and make sense alone (no "first... then three"). Trade-offs are one contrast you can say in one breath. Formulas are said in words once and checked, with every increment / decrement.

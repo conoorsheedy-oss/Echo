@@ -696,6 +696,8 @@ const PLAIN_FOLLOW_UPS = [
   'Any trade-offs?',
   'Are there any edge cases?',
   'How would you write test cases for it?',
+  'What happens if your server crashes after calling the provider?',
+  'What if two requests with the same key arrive at the same time?',
   'What happens if the input is empty?',
   'How would you handle really large inputs that do not fit in memory with your current approach?',
   'Okay, what if we need to return all the pairs instead of just one?',

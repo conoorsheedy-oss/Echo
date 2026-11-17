@@ -117,6 +117,7 @@ function createBriefStore({ file, summarize, log = console } = {}) {
         headlineBlock: B.buildHeadlineBriefBlock(brief, summary),
         type: brief.type,
         keywords: B.keywordsFor(brief, summary),
+        company: B.companyName(brief),
         diagnostic: B.describeBrief(brief, summary, status),
       };
     }

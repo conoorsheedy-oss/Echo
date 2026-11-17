@@ -1193,6 +1193,80 @@ reloadKnowledgeBtn.addEventListener('click', async () => {
   }
 });
 
+// ---- Story ideas (drafts) to confirm: answer card + Knowledge drawer ----
+// A draft is built from a real project detail but hasn't been confirmed, so
+// it's shown apart from the answer, dashed, with three choices. Only a
+// confirmed one becomes a story Echo uses.
+const storyDraftSlot = document.getElementById('suggestion-story-draft');
+const storyDraftsEl = document.getElementById('story-drafts');
+
+function makeEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function buildDraftCard(draft, { onDone } = {}) {
+  const card = makeEl('div', 'draft-card');
+  card.append(
+    makeEl('div', 'draft-head', 'Story idea from your projects · not confirmed'),
+    makeEl('div', 'draft-title', draft.title),
+    makeEl('div', 'draft-idea', draft.idea),
+    makeEl('div', 'draft-basis', `Based on: "${draft.basis}"${draft.source ? ` (${draft.source})` : ''}`),
+  );
+  const actions = makeEl('div', 'draft-actions');
+  const yes = makeEl('button', 'soft', 'It happened');
+  const similar = makeEl('button', '', 'Something like it');
+  const no = makeEl('button', '', "Didn't happen");
+  [yes, similar, no].forEach((b) => { b.type = 'button'; });
+  actions.append(yes, similar, no);
+  const edit = makeEl('form', 'draft-edit hidden');
+  const box = makeEl('textarea');
+  box.maxLength = 3000;
+  box.value = draft.idea;
+  box.setAttribute('aria-label', 'What actually happened');
+  const save = makeEl('button', 'soft', 'Save my version');
+  save.type = 'submit';
+  edit.append(box, save);
+  card.append(actions, edit);
+
+  const decide = async (decision, text) => {
+    [yes, similar, no, save].forEach((b) => { b.disabled = true; });
+    try {
+      const view = await api.decideStoryDraft(draft.key, decision, text);
+      if (view && view.knowledge) renderKnowledgeStatus(view.knowledge);
+      showToast(decision === 'no' ? "Got it, Echo won't suggest that one again" : 'Saved to your stories');
+      card.remove();
+      if (onDone) onDone(decision);
+      refreshStories();
+    } catch (err) {
+      showToast('Could not save that: ' + err.message);
+      [yes, similar, no, save].forEach((b) => { b.disabled = false; });
+    }
+  };
+  yes.addEventListener('click', () => decide('happened'));
+  no.addEventListener('click', () => decide('no'));
+  similar.addEventListener('click', () => {
+    edit.classList.toggle('hidden');
+    if (!edit.classList.contains('hidden')) box.focus();
+  });
+  edit.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!box.value.trim()) { box.focus(); return; }
+    decide('similar', box.value);
+  });
+  return card;
+}
+
+// The answer card's slot (one idea at most).
+function showStoryDraft(draft) {
+  storyDraftSlot.replaceChildren();
+  const ok = draft && typeof draft === 'object' && typeof draft.key === 'string' && typeof draft.idea === 'string';
+  storyDraftSlot.classList.toggle('hidden', !ok);
+  if (ok) storyDraftSlot.append(buildDraftCard(draft, { onDone: () => storyDraftSlot.classList.add('hidden') }));
+}
+
 // ---- CV story bank (Knowledge drawer; main.js / story-store.js) ----
 const storyToggle = document.getElementById('story-bank-toggle');
 const storyStatusEl = document.getElementById('story-bank-status');
@@ -1226,6 +1300,15 @@ function renderStories(view) {
     return li;
   }));
   storyListEl.classList.toggle('hidden', !(view.stories && view.stories.length));
+  const drafts = Array.isArray(view.drafts) ? view.drafts : [];
+  // Don't rebuild the list while the user is typing into one of the cards.
+  if (!storyDraftsEl.contains(document.activeElement)) {
+    storyDraftsEl.replaceChildren(
+      ...(drafts.length ? [makeEl('div', 'story-drafts-head', `Story ideas to confirm (${drafts.length})`)] : []),
+      ...drafts.map((d) => buildDraftCard(d)),
+    );
+  }
+  storyDraftsEl.classList.toggle('hidden', !drafts.length);
   clearTimeout(storyPollTimer);
   if (view.status === 'building') {
     storyPollTimer = setTimeout(refreshStories, 2000);
@@ -1248,6 +1331,34 @@ storyToggle.addEventListener('change', async () => {
     storyStatusEl.textContent = 'Could not change the story bank: ' + err.message;
   } finally {
     storyToggle.disabled = false;
+  }
+});
+
+// "Add a real story" -> my-stories.md in the knowledge folder (main.js).
+const addStoryForm = document.getElementById('add-story-form');
+const addStoryTitle = document.getElementById('add-story-title');
+const addStoryText = document.getElementById('add-story-text');
+const addStoryBtn = document.getElementById('add-story-btn');
+addStoryForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!addStoryText.value.trim()) {
+    storyStatusEl.textContent = 'Write what happened first.';
+    addStoryText.focus();
+    return;
+  }
+  addStoryBtn.disabled = true;
+  try {
+    const result = await api.addStory({ title: addStoryTitle.value, text: addStoryText.value });
+    if (result.status) renderKnowledgeStatus(result.status);
+    addStoryTitle.value = '';
+    addStoryText.value = '';
+    document.getElementById('add-story').open = false;
+    showToast(`Story saved to ${result.file}`);
+    refreshStories();
+  } catch (err) {
+    storyStatusEl.textContent = 'Could not save the story: ' + err.message;
+  } finally {
+    addStoryBtn.disabled = false;
   }
 });
 
@@ -2373,6 +2484,7 @@ function displayAnswer(answer, { resetScroll = true, remember = true } = {}) {
   suggestionActions.classList.remove('hidden');
   renderAnswerText(answer.text, answer.style);
   showGrounding(answer.groundingFiles, answer.story);
+  showStoryDraft(answer.storyDraft);
   if (resetScroll) suggestionBodyEl.scrollTop = 0;
   if (remember) rememberAnswer('suggestion', answer.question, answer.text);
 }
@@ -2385,6 +2497,7 @@ function showEmptyPanel() {
   suggestionText.classList.add('hidden');
   suggestionActions.classList.add('hidden');
   showGrounding(undefined);
+  showStoryDraft(null);
   setQuestionLine('');
   suggestionPlaceholder.classList.remove('hidden');
   updateSuggestionPlaceholder();
@@ -2917,6 +3030,7 @@ async function requestSuggestion(instruction, opts = {}) {
       question: questionLine,
       groundingFiles: isObj ? result.groundingFiles : undefined,
       story: isObj && result.story && typeof result.story === 'object' ? result.story : undefined,
+      storyDraft: isObj && result.storyDraft && typeof result.storyDraft === 'object' ? result.storyDraft : undefined,
       style: (isObj && result.answerStyle) || req.answerStyle,
     };
     dropPendingStream(req);

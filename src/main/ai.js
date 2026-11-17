@@ -289,7 +289,7 @@ const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You"
 const BANNED_TELLS = `Never use these AI tells: "Great question", "That's a great question", "Great point", "I completely agree", "Certainly", "Absolutely", "I'd be happy to", "leverage", "delve", "utilize", "passionate about", "spearheaded", "synergy", "robust", "seamless", "cutting-edge", "game-changer", "it's worth noting", "in summary", "in conclusion", "overall", "furthermore", "moreover", "additionally", "I'm excited to", "thrilled", "a testament to", "navigate", "foster", "holistic", "dive into", "key takeaway", "in today's fast-paced world", "Not only X but also Y" constructions, and neat lists of three adjectives ("fast, scalable and reliable"). Never use em dashes (—): use a comma or a full stop, or start a new sentence.`;
 
 // Highest-priority rule: sounding human must never mean making things up.
-const GROUNDING = `\nTRUTH FIRST (this overrides every style rule below): only state facts about the user (projects, jobs, schools, tools, numbers, results, stories) that appear in the transcript or in their background material. If a fact isn't there, don't guess: keep it general or use a short [placeholder] they can fill in. Never add a setback, a struggle, a team size, a duration, a number or a "what it led to" just to make a story sound real. The tone examples below use made-up facts purely to show style; never reuse any of their details. For technical facts (APIs, complexities, definitions), say only what you're confident is correct; if unsure, say so in a few words rather than guessing.`;
+const GROUNDING = `\nTRUTH FIRST (this overrides every style rule below): only state facts about the user (projects, jobs, schools, tools, numbers, results, stories) that appear in the transcript or in their background material. If a fact isn't there, don't guess: keep it general or use a short [placeholder] they can fill in. Never add a setback, a struggle, a team size, a duration, a number or a "what it led to" just to make a story sound real. Use each number exactly as the material gives it, with what it measures; never mix figures from different places. The tone examples below use made-up facts purely to show style; never reuse any of their details. For technical facts (APIs, complexities, definitions), say only what you're confident is correct; if unsure, say so in a few words rather than guessing.`;
 
 // Fewer, positive rules: long "don't" lists make the model perform casualness
 // (every answer opening "Honestly,") and prime the very words they ban. The
@@ -301,6 +301,7 @@ const HUMAN_VOICE = `\nVOICE. This gets said out loud by the user, so write spee
 - One idea at a time. People don't list three adjectives or three parallel points; they say one thing, then add the next thing that comes to mind.
 - Concrete over impressive: the actual tool, the actual number, what actually happened, but only ones from their facts (see TRUTH FIRST). Say numbers how people say them ("about a third", "a couple of weeks").
 - Answer the question that was asked, at the size it was asked. A quick question gets one or two lines.
+- Compact but specific: fewer words, more concrete detail. Cut filler and set-up, never the specifics (the actual name, number, tool or step).
 - No wrap-up. Stop after the last useful detail. No moral, no summary sentence, no "and that's why...".
 - Vary how answers start. Most start with the point itself; only now and then "So," or "Yeah,". Never open by praising the question or repeating it back.
 - Real hedges only where a person would hedge ("I think", "if I remember right"). Be plainly confident about the user's own facts.
@@ -352,12 +353,15 @@ Example of the format (facts made up, never reuse them):
 
 const TECHNICAL_STYLE = `\nCoding, maths, probability, puzzles and system design (in either answer style). There are two kinds of technical question, and they get different formats. These rules override the format rules above for these questions only.
 A) A NEW problem to solve (a coding task, a maths/probability question, a puzzle, "design a system"). Interviewers want to hear HOW the user thinks, not just the final answer, so show the thought process the user can say out loud while working:
-1. Line 1: a one-line spoken summary of the approach (what the user would say first), then a blank line.
+1. Line 1: ONE short clarifying question the user asks before solving, so they engage instead of jumping to code: about something the problem doesn't already state (input size or constraints, an edge case like empty input, duplicates or negatives, or what time complexity they're hoping for; for design, the scale or the main requirement). Then a blank line. Skip it only for maths / probability / puzzles where nothing is unclear.
+   Then one line: a one-line spoken summary of the approach (what the user says once they have the answer), then a blank line.
 2. A short "thinking out loud" walk-through as a numbered list (3-4 items). Each item starts with a **bold cue of 1-3 words** (e.g. **Brute force**, **Key insight**, **Storage**), then one short spoken line in the user's voice, under about 12 words, so the user can glance at the cue and say it in their own words. Never write "first", "second", "then three": each item must make sense on its own. For code, roughly: what the input/output is and any edge case worth checking; the simple brute-force idea and why it's too slow (with its complexity); the key insight that makes it better; the plan for the final approach. For maths/probability: what's being asked, the setup, then the key steps. For system design: the requirements to confirm, the core components, the main trade-off.
-3. Then what's needed to actually solve it: for code, ONE complete, correct code block in the language (and method signature) shown on screen if there is one, nothing left out; for maths/probability, the final answer with the number; for design, the final design in a few short lines.
+3. Then what's needed to actually solve it: for code, ONE complete, correct code block in the language (and method signature) shown on screen if there is one, nothing left out, with short comments on the key lines (what a step does or why, a few words each, about 3-6 in total, not one on every line); for maths/probability, the final answer with the number; for design, the final design in a few short lines.
 4. End with one line on time/space complexity where it applies, and optionally one line on how to quickly test it with a small example.
 Trade-offs: one plain contrast the user can say in one breath ("A sliding log is exact but stores every timestamp, so I'd use a counter"), never a list of pros and cons. Formulas and counters: say the formula in words once, and double-check it and every increment / decrement before writing it; a wrong sign or weight is worse than no formula.
 B) A FOLLOW-UP about a solution or code already discussed ("why did you use X", "what if the input is empty", "what's the complexity", "how would you test it", "any edge cases", "can you explain this part"), or a quick conceptual question. Answer it like a person in the room would: the headline sentence with the direct answer, then 1-3 short spoken lines with the reasoning. No numbered walk-through, and don't repeat the full code. Only if the answer changes the code, add one tiny code block with just the changed lines. Use the earlier answers in this session to know what the code is.
+Failure-case follow-ups (a crash, a retry, a timeout, two requests at once): say what state is written before the risky step, how it recovers after (check that state, or reconcile with the other system), and what stops two at once (a unique key or a lock). Name the one or two cases that matter most, not a list.
+Spoken lines never contain code: no identifiers with underscores or camelCase, no brackets, quotes or operators. Say what it does in plain words ("a set of the IDs I've seen", "the first element"), never its name or syntax. Code only goes inside the code block, which the user types or shows rather than reads out.
 Keep every line plain and spoken (same voice rules as above). In CUES style, keep the numbered steps as short fragments rather than sentences.`;
 
 function normalizeAnswerStyle(style) {
@@ -380,8 +384,8 @@ function normalizeMode(mode) {
 // drops the request silently). Explicit requests never get this option.
 const NO_RESPONSE_NOTE = `\n- Automatic suggestions: only when the LATEST section says this suggestion was triggered automatically, and there is genuinely nothing useful for the user to say (small talk, an update that needs no reply, a remark aimed at someone else), reply with exactly ${NO_RESPONSE_SENTINEL} and nothing else. When the user asked for the answer themselves, always give a useful reply.`;
 
-const STAR_SCRIPT = '- For behavioural "tell me about a time" questions use a compressed STAR shape: the situation in a clause, what I did, and end on the result.';
-const STAR_CUES = '- For behavioural "tell me about a time" questions follow STAR (situation, what I did, result) and make the last cue the concrete result.';
+const STAR_SCRIPT = '- For behavioural "tell me about a time" questions use a compressed STAR shape, about 30 seconds out loud: the situation in a clause (name the actual technical choice or problem in the first line), what I did, and end on the result. When a team or a lead was involved, make the user\'s own part explicit ("I did X; my lead did Y"), using only what the material says.';
+const STAR_CUES = '- For behavioural "tell me about a time" questions follow STAR (situation, what I did, result), about 30 seconds out loud; the first cue names the actual technical choice or problem, one cue says what the user did themselves (not the team), and the last cue is the concrete result.';
 
 // Interview only (Phase 2b): how to read the INTERVIEW STATE block and the
 // "Direction:" line that main.js adds to the user message. Fixed text, so
@@ -577,7 +581,7 @@ function describeScreenshots(images) {
 // Answer-format hint for this one question, placed in LATEST (the system
 // prompt stays identical across requests -- see the layout note below).
 const KIND_HINTS = {
-  problem: 'Question type: a NEW problem to solve. Use the full technical format (spoken summary line, short numbered walk-through, then the complete code or final answer, then complexity).',
+  problem: 'Question type: a NEW problem to solve. Use the full technical format (a clarifying question to ask first, the spoken approach line, short numbered walk-through, then the complete commented code or final answer, then complexity).',
   followup: 'Question type: a FOLLOW-UP about the solution or code already discussed (or a quick conceptual question). Keep it short and spoken: the headline sentence with the direct answer, then 1-3 short lines. No numbered walk-through and no full code again; at most one tiny code block with just the changed lines if the answer changes the code.',
 };
 
@@ -1187,7 +1191,7 @@ async function generateSuggestion(params) {
   const { block: briefBlock, type: interviewType } = briefFor(mode, params.brief);
   const thinkingLevel = interviewBrief.adjustThinkingLevel(
     resolveThinkingLevel({ mode, quality, kind }),
-    { type: interviewType, kind, quality: normalizeQuality(quality) }
+    { type: interviewType, kind, quality: normalizeQuality(quality), question: mode === 'interview' ? named : '' }
   );
   const answerTokens = answerTokensFor(kind, instruction);
 
@@ -1253,7 +1257,7 @@ function buildHeadlineSystemPrompt(mode) {
   return `${situation} Give ONLY the first sentence the user should say out loud right now, in their own voice, in reply to the latest question. A fuller answer is being written separately and follows a moment later; your sentence is what they start talking with while it loads.
 - Exactly one short spoken sentence (under 25 words), first person, contractions, plain everyday words. It directly answers the question, or opens the answer, and works on its own. It should sound like how a real person naturally starts talking, not a polished opening line.
 - No preamble, no quotation marks around it, no labels, no markdown, no lists, no code.
-- A NEW coding, maths or design problem: say how you'd start (briefly restate what's asked, or the approach you're sure of). Never state a final number or claim you aren't sure of.
+- A NEW coding or design problem: one short clarifying question to ask them first, about something the problem doesn't already state (input size, an edge case, or the time complexity they're hoping for; for design, the scale). A maths or probability problem: say how you'd start. Never state a final number or claim you aren't sure of.
 - A follow-up about code already discussed (why X, what if, complexity, testing, edge cases): the direct answer in one line, consistent with the earlier answers.
 - Ground it in the conversation and the user's background. Never invent projects, employers, numbers or experience: if the question is about their experience and no matching fact is given, use a short [placeholder] instead.${modeRules}
 - ${BANNED_TELLS}`;
@@ -1574,7 +1578,12 @@ Rules:
 - "situation", "action", "result": one or two short plain sentences each, in the first person, re-said in plain spoken words (not copied buzzwords), but with no fact that isn't in the files.
 - "themes": the behavioural topics this story could answer, only from: THEME_LIST.
 - "skills": the tools, languages and skills it shows, as named in the files.
-Return 4 to 10 stories, the strongest and most distinct first. Fewer if the files don't have that many real stories; none rather than invented ones.`;
+Return 4 to 10 stories, the strongest and most distinct first. Fewer if the files don't have that many real stories; none rather than invented ones.
+Then "drafts": story IDEAS for the user to confirm, for behavioural themes your stories above don't cover (especially conflict, failure, leadership, pressure, ambiguity). Look for a project detail that suggests one: a failover or retry feature suggests something broke; a bug that was fixed suggests a mistake caught; a team project suggests a disagreement about an approach; a deadline or a hackathon suggests pressure. For each:
+- "basis": the exact phrase from the files it's built on (checked word for word).
+- "idea": 2 or 3 short first-person lines the user could say if it happened, staying close to the basis. Never add numbers, names, tools or results that aren't in the files. The user will confirm it, fix it, or reject it, so make it easy to check: one concrete moment, not a polished story.
+- "title", "source" and "themes" as for stories.
+Return 0 to 8 drafts, one per theme at most, the most plausible first.`;
 
 const STORY_SCHEMA = {
   type: 'OBJECT',
@@ -1596,6 +1605,20 @@ const STORY_SCHEMA = {
         required: ['title', 'source', 'action', 'quotes', 'themes'],
       },
     },
+    drafts: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          title: { type: 'STRING' },
+          source: { type: 'STRING' },
+          basis: { type: 'STRING' },
+          idea: { type: 'STRING' },
+          themes: { type: 'ARRAY', items: { type: 'STRING' } },
+        },
+        required: ['title', 'basis', 'idea', 'themes'],
+      },
+    },
   },
   required: ['stories'],
 };
@@ -1608,7 +1631,7 @@ async function extractStories({ text, signal } = {}) {
     parts: [{ text: `THE CANDIDATE'S FILES:\n\n${input}` }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: STORY_SCHEMA },
     thinkingLevel: 'low',
-    answerTokens: 4096,
+    answerTokens: 6144, // stories + drafts
     signal,
     timeoutMs: STORY_EXTRACT_TIMEOUT_MS,
   });

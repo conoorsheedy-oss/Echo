@@ -135,6 +135,7 @@ function buildBriefBlock(brief, summary) {
   if (b.companyRole || ad.text) {
     rules.push("Use the role and the ad to choose which of the user's real experiences to talk about and what to stress. They never add facts about the user.");
     rules.push('Facts about the company (products, values, news, numbers, the team) only if they are written in this brief; otherwise use a short [placeholder] such as "[something you like about their product]".');
+    rules.push('"Why this company / role?": lead with the user\'s own real connection to the company or its product from their files or notes (having used it, built on it, integrated it), then one concrete reason about this role. No abstract phrases ("reliability above everything", "robust infrastructure").');
   }
   if (ad.text) {
     rules.push("Asked about a skill or tool from the ad that isn't in the user's facts: be honest. Mention the closest thing they have actually done, or how they'd pick it up. Never claim it.");
@@ -193,25 +194,50 @@ function keywordsFor(brief, summary) {
 // snippets; follow-ups in a thread (prefer list) keep theirs.
 //   search(query, topK) -> snippets ({ source, index, text })
 const FIT_MAX_SNIPPETS = 5;
-function pickFitSnippet({ snippets, keywords, analysis, prefer, search }) {
+
+// "Stripe, SWE intern" / "SWE intern at Stripe" / "Stripe - Payments" -> "Stripe".
+function companyName(brief) {
+  const role = normalizeBrief(brief).companyRole;
+  if (!role) return '';
+  const at = /\bat\s+([A-Z][\w&.'-]*(?:\s+[A-Z][\w&.'-]*){0,3})/.exec(role);
+  const name = (at ? at[1] : role.split(/\s*[,|(–—]\s*|\s+-\s+/)[0]).trim();
+  return name.length >= 2 && name.length <= 40 ? name : '';
+}
+
+// company: from companyName(); a snippet that names the company (they used
+// it, built on it) is the best answer to "why us?", so it wins when present.
+function pickFitSnippet({ snippets, keywords, analysis, prefer, search, company = '' }) {
   const list = Array.isArray(snippets) ? snippets : [];
   const none = { snippets: list, fit: '' };
-  if (!Array.isArray(keywords) || !keywords.length || list.length >= FIT_MAX_SNIPPETS) return none;
+  const words = [...(company ? [company] : []), ...(Array.isArray(keywords) ? keywords : [])];
+  if (!words.length || list.length >= FIT_MAX_SNIPPETS) return none;
   if (Array.isArray(prefer) && prefer.length) return none;
   if (!analysis || analysis.intent !== 'behavioural_question' || analysis.questionKind !== 'general') return none;
   const have = new Set(list.map((x) => `${x.source}#${x.index}`));
-  const found = search(keywords.join(' '), 3) || [];
-  const extra = found.find((x) => !have.has(`${x.source}#${x.index}`));
+  const found = (search(words.join(' '), 5) || []).filter((x) => !have.has(`${x.source}#${x.index}`));
+  if (company && list.some((x) => mentions(x.text, company))) return { snippets: list, fit: '' };
+  const named = company ? found.find((x) => mentions(x.text, company)) : null;
+  const extra = named || found[0];
   return extra ? { snippets: [...list, extra], fit: extra.source } : none;
+}
+
+function mentions(text, name) {
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^A-Za-z0-9])${esc}([^A-Za-z0-9]|$)`, 'i').test(String(text || ''));
 }
 
 // ---- Thinking level (Settings > Quality = Auto only) ----
 // Coding and system design rounds: technical follow-ups get 'medium'
 // instead of 'low' (the code and its trade-offs are what's being judged).
 // Everything else keeps the usual Auto rule.
-function adjustThinkingLevel(level, { type, kind, quality } = {}) {
+// Any interview type: a follow-up about failure cases (a crash, retries,
+// two requests at once) also gets 'medium': it's where shallow answers show.
+const FAILURE_CASE_RE = /\b(crash\w*|fail(?:s|ed|ure|ures)?|goes? down|dies|restart\w*|retr(?:y|ies|ied)|time ?outs?|timed out|partial\w*|concurren\w*|race conditions?|at the same time|simultaneous\w*|twice|duplicates?|idempoten\w*|consisten\w*|network (?:split|partition|error))\b/i;
+function adjustThinkingLevel(level, { type, kind, quality, question } = {}) {
   if (quality && quality !== 'auto') return level;
-  if ((type === 'coding' || type === 'system_design') && kind === 'followup' && level === 'low') return 'medium';
+  if (kind !== 'followup' || level !== 'low') return level;
+  if (type === 'coding' || type === 'system_design') return 'medium';
+  if (FAILURE_CASE_RE.test(String(question || ''))) return 'medium';
   return level;
 }
 
@@ -253,6 +279,7 @@ module.exports = {
   buildHeadlineBriefBlock,
   keywordsFor,
   pickFitSnippet,
+  companyName,
   adjustThinkingLevel,
   describeBrief,
 };

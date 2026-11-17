@@ -119,3 +119,71 @@ test('story bank: no story with the asked-for theme -> told not to bend one into
   const generic = 'Tell me about a project you are proud of.';
   assert.ok(!/None of these stories/.test(SB.buildStoryBlock(SB.pickStories(stories, { question: generic }), { question: generic })));
 });
+
+// ---- Second mock interview ----
+
+test('prompt: no code read aloud, failure-case follow-ups, STAR names the user\'s own part, numbers not mixed', () => {
+  for (const style of ['script', 'cues']) {
+    const system = ai.buildSystemPrompt('interview', style);
+    assert.match(system, /Spoken lines never contain code: no identifiers with underscores or camelCase, no brackets/);
+    assert.match(system, /Failure-case follow-ups \(a crash, a retry, a timeout, two requests at once\): say what state is written before the risky step/);
+    assert.match(system, /about 30 seconds out loud/);
+    assert.match(system, /never mix figures from different places/);
+  }
+  assert.match(ai.buildSystemPrompt('interview', 'script'), /make the user's own part explicit \("I did X; my lead did Y"\)/);
+  assert.match(ai.buildSystemPrompt('interview', 'cues'), /one cue says what the user did themselves \(not the team\)/);
+});
+
+test('brief: "why us" leads with the user\'s real connection; a CV line naming the company wins', () => {
+  const B = require('../src/main/interview-brief');
+  assert.match(B.buildBriefBlock({ companyRole: 'Stripe, SWE intern' }), /"Why this company \/ role\?": lead with the user's own real connection/);
+  assert.equal(B.companyName({ companyRole: 'Stripe, Software Engineering Intern, payments' }), 'Stripe');
+  assert.equal(B.companyName({ companyRole: 'SWE intern at Jane Street' }), 'Jane Street');
+  assert.equal(B.companyName({ companyRole: 'Google - STEP intern' }), 'Google');
+  const behavioural = { intent: 'behavioural_question', questionKind: 'general' };
+  const own = [{ source: 'cv.md', index: 0, text: 'Tutored 50 students in Java' }];
+  const found = [{ source: 'cv.md', index: 1, text: 'Python and Django REST' }, { source: 'cv.md', index: 2, text: 'Stripe OAuth and webhooks at PayDai' }];
+  const r = B.pickFitSnippet({ snippets: own, keywords: ['python'], analysis: behavioural, search: () => found, company: 'Stripe' });
+  assert.deepEqual(r.snippets.map((x) => x.index), [0, 2]);
+  assert.equal(B.pickFitSnippet({ snippets: [found[1]], keywords: ['python'], analysis: behavioural, search: () => found, company: 'Stripe' }).fit, '', 'a CV line naming Stripe is already there: nothing added');
+  // "Stripey" doesn't count as naming Stripe.
+  assert.equal(B.pickFitSnippet({ snippets: own, keywords: [], analysis: behavioural, search: () => [{ source: 'a.md', index: 9, text: 'stripey shirts' }], company: 'Stripe' }).fit, 'a.md', 'falls back to the best keyword match');
+});
+
+test('failure-case follow-ups think at medium, in any interview type', () => {
+  const B = require('../src/main/interview-brief');
+  for (const q of ['What happens if your server crashes after calling the provider?', 'What if two requests with the same key arrive at the same time?', 'What about retries?']) {
+    assert.equal(B.adjustThinkingLevel('low', { type: 'auto', kind: 'followup', quality: 'auto', question: q }), 'medium', q);
+  }
+  assert.equal(B.adjustThinkingLevel('low', { type: 'auto', kind: 'followup', quality: 'auto', question: 'What if the input is empty?' }), 'low');
+  assert.equal(B.adjustThinkingLevel('low', { type: 'auto', kind: 'general', quality: 'auto', question: 'Tell me about a failure.' }), 'low', 'behavioural "failure" is not a failure case');
+  assert.equal(B.adjustThinkingLevel('low', { type: 'auto', kind: 'followup', quality: 'fast', question: 'What if it crashes?' }), 'low');
+  const pc = [{ kind: 'suggestion', question: 'Design an idempotent payments API', text: 'Use an idempotency key.' }];
+  assert.equal(ai.analyzeSuggestion({ mode: 'interview', question: 'What happens if your server crashes after calling the provider?', transcript: 'Them: x', previousAnswers: pc }).questionKind, 'followup');
+});
+
+test('"Add a real story" appends to my-stories.md, which then loads like any file', () => {
+  const knowledge = require('../src/main/knowledge');
+  assert.throws(() => knowledge.addStory({ title: 'x', text: '   ' }), /Write the story first/);
+  assert.equal(knowledge.addStory({ title: 'Disagreeing with my supervisor', text: 'He wanted tests to auto-pass.\nI showed the failing rows.' }), 'my-stories.md');
+  knowledge.addStory({ title: '', text: 'A second story.' });
+  const text = fs.readFileSync(path.join(knowledge.KNOWLEDGE_DIR, 'my-stories.md'), 'utf8');
+  assert.match(text, /^# My stories\n/);
+  assert.match(text, /## Disagreeing with my supervisor\n\nHe wanted tests to auto-pass\.\nI showed the failing rows\.\n/);
+  assert.match(text, /## Story\n\nA second story\./);
+  assert.equal((text.match(/^# My stories/gm) || []).length, 1, 'header once');
+  knowledge.loadKnowledgeBase();
+  assert.ok(knowledge.getDocuments().some((d) => d.source === 'my-stories.md'));
+  assert.ok(knowledge.searchKnowledge('supervisor auto-pass tests').some((s) => s.source === 'my-stories.md'));
+});
+
+test('new coding / design problem: a clarifying question first, commented code; answers compact but specific', () => {
+  for (const style of ['script', 'cues']) {
+    const system = ai.buildSystemPrompt('interview', style);
+    assert.match(system, /1\. Line 1: ONE short clarifying question the user asks before solving/);
+    assert.match(system, /about something the problem doesn't already state/);
+    assert.match(system, /short comments on the key lines .* not one on every line/);
+    assert.match(system, /Compact but specific: fewer words, more concrete detail/);
+  }
+  assert.match(ai.buildHeadlineSystemPrompt('interview'), /A NEW coding or design problem: one short clarifying question to ask them first/);
+});

@@ -953,6 +953,48 @@ option {
   flex-shrink: 0;
 }
 
+/* Story idea (draft) from the user's projects: clearly not a fact. */
+#suggestion-story-draft { margin-top: var(--sp-5); flex-shrink: 0; }
+.draft-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--sp-6);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.draft-head {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+.draft-title { font-size: var(--fs-sm); font-weight: 650; color: var(--text-strong); }
+.draft-idea { font-size: var(--fs-sm); line-height: 1.5; color: var(--text); white-space: pre-line; }
+.draft-basis { font-size: var(--fs-xs); color: var(--text-subtle); overflow-wrap: anywhere; }
+.draft-actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.draft-actions button { height: 28px; border-radius: var(--r-md); padding: 0 var(--sp-5); }
+.draft-edit { display: flex; flex-direction: column; gap: var(--sp-3); }
+.draft-edit textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text);
+  padding: 7px var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.draft-edit button { align-self: flex-start; height: 28px; border-radius: var(--r-md); }
+.story-drafts { display: flex; flex-direction: column; gap: var(--sp-4); }
+.story-drafts-head { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+#app.compact #suggestion-story-draft { display: none !important; }
+
 /* Action toolbar: the card's footer, so Copy is always one click away
    however long the answer is. Icon buttons; Copy is the prominent one. */
 #suggestion-actions {
@@ -1448,6 +1490,15 @@ option {
   overflow-wrap: anywhere;
 }
 .story-list .story-meta { color: var(--text-subtle); margin-left: var(--sp-2); }
+.add-story summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  padding: var(--sp-2) 0;
+}
+.add-story-form { padding: var(--sp-3) 0 0; overflow: visible; }
+.add-story-form button { align-self: flex-start; height: 32px; border-radius: var(--r-md); }
 
 #knowledge-status {
   padding: var(--sp-6);
@@ -2490,3 +2541,4 @@ html[data-see-through] #app:has(> :is(#settings-overlay, #summary-overlay, #diag
   .empty-state[data-state="listening"] .empty-icon { animation: none; }
   #gesture-hold-bar { transition: none; }
 }
+#knowledge-section { overflow-y: auto; }

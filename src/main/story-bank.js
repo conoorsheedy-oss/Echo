@@ -126,6 +126,60 @@ function verifyStories(raw, documents) {
   return { stories, dropped };
 }
 
+// ---- Story drafts (ideas to confirm) ----
+// Built by the same call from project details the files imply but don't
+// tell as a story. Kept only if the basis phrase is word for word in the
+// files and the idea adds no number that isn't there. They are NEVER used
+// as facts in an answer: the answer card shows them separately, and only a
+// draft the user confirms becomes a story (my-stories.md).
+const MAX_DRAFTS = 8;
+const DRAFT_IDEA_MAX = 320;
+
+// Stable across rebuilds, so "didn't happen" sticks.
+function draftKey(d) {
+  return crypto.createHash('sha256').update(`${normalizeForMatch(d.title)}\u0000${normalizeForMatch(d.basis)}`).digest('hex').slice(0, 16);
+}
+
+function verifyDrafts(raw, documents) {
+  const docs = (documents || []).map((d) => ({ source: d.source, norm: normalizeForMatch(d.text) }));
+  const allNorm = docs.map((d) => d.norm).join('\n');
+  const allNumbers = new Set(numbersIn(allNorm));
+  const list = raw && Array.isArray(raw.drafts) ? raw.drafts : [];
+  const drafts = [];
+  for (const item of list) {
+    if (drafts.length >= MAX_DRAFTS) break;
+    if (!item || typeof item !== 'object') continue;
+    const title = clean(item.title, FIELD_MAX.title);
+    const idea = clean(item.idea, DRAFT_IDEA_MAX);
+    const basis = clean(item.basis, FIELD_MAX.quote).replace(/^["']|["']$/g, '');
+    const nb = normalizeForMatch(basis);
+    if (!title || !idea || nb.length < 12 || !allNorm.includes(nb)) continue;
+    if (!numbersIn(`${title} ${idea}`).every((n) => allNumbers.has(n))) continue;
+    const themes = [...new Set((Array.isArray(item.themes) ? item.themes : []).map((t) => String(t).toLowerCase().replace(/[\s-]+/g, '_')).filter((t) => THEMES.includes(t)))];
+    if (!themes.length) continue;
+    const named = docs.find((d) => d.source === item.source && d.norm.includes(nb)) || docs.find((d) => d.norm.includes(nb));
+    const draft = { title, idea, basis, themes, source: named ? named.source : '' };
+    draft.key = draftKey(draft);
+    if (drafts.some((d) => d.key === draft.key)) continue;
+    drafts.push(draft);
+  }
+  return drafts;
+}
+
+// A draft to show for this question, or null: only when the question asks
+// for a theme no confirmed story has, and only drafts the user hasn't
+// answered yet.
+function pickDraft(drafts, { question, stories = [], decided = new Set() } = {}) {
+  if (!Array.isArray(drafts) || !drafts.length) return null;
+  const wanted = themesForQuestion(question);
+  const open = drafts.filter((d) => !decided.has(d.key));
+  if (!open.length) return null;
+  const covered = (t) => stories.some((s) => s.themes.includes(t));
+  const gaps = wanted.filter((t) => !covered(t));
+  if (!gaps.length) return null;
+  return open.find((d) => d.themes.some((t) => gaps.includes(t))) || null;
+}
+
 function tokens(s) {
   return (String(s || '').toLowerCase().match(/[a-z0-9+#]+/g) || []).filter((w) => w.length > 2);
 }
@@ -240,4 +294,8 @@ module.exports = {
   buildStoryBlock,
   buildHeadlineStoryLine,
   storyToldIn,
+  verifyDrafts,
+  pickDraft,
+  draftKey,
+  MAX_DRAFTS,
 };

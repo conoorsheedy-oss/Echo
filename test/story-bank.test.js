@@ -317,3 +317,76 @@ test('Ask panel: grounding + spoken-answer rules; a typed behavioural question g
   assert.ok(!allText(plain.body).includes('STORY BANK'));
   assert.equal((await ask({ mode: 'meeting', stories: { block: plan.block } })).raw, (await ask({ mode: 'meeting' })).raw);
 });
+
+// ---- 5. story ideas (drafts) to confirm ----
+
+const RAW_WITH_DRAFTS = {
+  stories: RAW.stories.slice(0, 2),
+  drafts: [
+    { title: 'Catching my own memory leak', source: 'cv.md', basis: 'my first version leaked memory under long runs', idea: 'My first version of the simulation leaked memory on long runs.\nI tracked it down and rewrote the allocator.', themes: ['failure'] },
+    { title: 'Invented basis', source: 'cv.md', basis: 'argued with the CTO about microservices', idea: 'I argued with the CTO.', themes: ['conflict'] },
+    { title: 'Invented number', source: 'cv.md', basis: 'Disagreed with my lead about caching', idea: 'We argued for 45 minutes about caching.', themes: ['conflict'] },
+    { title: 'No usable theme', source: 'cv.md', basis: 'Disagreed with my lead about caching', idea: 'We talked about caching.', themes: ['vibes'] },
+    { title: 'Caching pushback', source: 'cv.md', basis: 'Disagreed with my lead about caching', idea: 'My lead wanted a cache; I wanted to measure first.\nWe ran an A/B test.', themes: ['conflict'] },
+  ],
+};
+
+test('verifyDrafts: basis word for word, no new numbers, a known theme, stable keys', () => {
+  const drafts = SB.verifyDrafts(RAW_WITH_DRAFTS, DOCS);
+  assert.deepEqual(drafts.map((d) => d.title), ['Catching my own memory leak', 'Caching pushback']);
+  assert.equal(drafts[0].source, 'cv.md');
+  assert.match(drafts[0].key, /^[0-9a-f]{16}$/);
+  assert.equal(SB.verifyDrafts(RAW_WITH_DRAFTS, DOCS)[1].key, drafts[1].key, 'same draft, same key');
+  assert.deepEqual(SB.verifyDrafts({ stories: [] }, DOCS), []);
+});
+
+test('pickDraft: only for a theme no confirmed story covers, never one already answered', () => {
+  const { stories } = SB.verifyStories({ stories: RAW.stories.slice(0, 2) }, DOCS); // impact + leadership/teamwork
+  const drafts = SB.verifyDrafts(RAW_WITH_DRAFTS, DOCS);
+  assert.equal(SB.pickDraft(drafts, { question: 'Tell me about a time you disagreed with your lead.', stories }).title, 'Caching pushback');
+  assert.equal(SB.pickDraft(drafts, { question: 'Tell me about a mistake you made.', stories }).title, 'Catching my own memory leak');
+  assert.equal(SB.pickDraft(drafts, { question: 'Tell me about a time you led a team.', stories }), null, 'leadership is covered');
+  assert.equal(SB.pickDraft(drafts, { question: 'Tell me about yourself.', stories }), null, 'no theme, no idea');
+  const decided = new Set([drafts[1].key]);
+  assert.equal(SB.pickDraft(drafts, { question: 'Tell me about a time you disagreed with your lead.', stories, decided }), null);
+});
+
+test('store: drafts kept with the bank; "didn\'t happen" and "it happened" stick across rebuilds', async () => {
+  let docs = DOCS;
+  const file = tmpFile();
+  const store = createStoryStore({ file, extract: async () => RAW_WITH_DRAFTS, getDocuments: () => docs, log: quiet });
+  await store.rebuild();
+  assert.equal(store.get().drafts.length, 2);
+  const conflict = store.draftFor({ question: 'Tell me about a disagreement with a senior engineer.' });
+  assert.equal(conflict.title, 'Caching pushback');
+  assert.ok(conflict.basis && conflict.idea && conflict.key);
+  assert.equal(store.decideDraft(conflict.key, 'rejected').title, 'Caching pushback');
+  assert.equal(store.draftFor({ question: 'Tell me about a disagreement with a senior engineer.' }), null);
+  assert.equal(store.decideDraft('ffffffffffffffff', 'rejected'), null, 'unknown key');
+  assert.equal(store.decideDraft(conflict.key, 'maybe'), null, 'unknown decision');
+  const leak = store.draftFor({ question: 'Tell me about a failure.' });
+  store.decideDraft(leak.key, 'confirmed');
+  assert.equal(store.get().drafts.length, 0);
+  // Files change -> rebuilt -> the same drafts come back, still decided.
+  docs = [{ source: 'cv.md', text: `${CV}\n- One more line.` }];
+  await store.rebuild();
+  assert.equal(store.get().drafts.length, 0);
+  // And after a restart.
+  const again = createStoryStore({ file, extract: async () => RAW_WITH_DRAFTS, getDocuments: () => docs, log: quiet });
+  assert.equal(again.get().drafts.length, 0);
+  // Switched off: no ideas.
+  const fresh = createStoryStore({ file: tmpFile(), extract: async () => RAW_WITH_DRAFTS, getDocuments: () => DOCS, log: quiet });
+  await fresh.rebuild();
+  fresh.setEnabled(false);
+  assert.equal(fresh.draftFor({ question: 'Tell me about a failure.' }), null);
+});
+
+test('extraction asks for drafts too, in the schema and the prompt', async () => {
+  const calls = captureFetch(JSON.stringify(RAW_WITH_DRAFTS));
+  const out = await ai.extractStories({ text: SB.buildExtractionInput(DOCS) });
+  const body = calls[0].body;
+  assert.ok(body.generationConfig.responseSchema.properties.drafts);
+  assert.match(body.systemInstruction.parts[0].text, /"drafts": story IDEAS for the user to confirm/);
+  assert.match(body.systemInstruction.parts[0].text, /Never add numbers, names, tools or results that aren't in the files/);
+  assert.equal(out.drafts.length, RAW_WITH_DRAFTS.drafts.length);
+});
