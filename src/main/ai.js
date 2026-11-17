@@ -188,6 +188,7 @@ function httpError(provider, res, info) {
 // recommend using to catch this. A known-phrase list is a second, cheap layer.
 const NO_SPEECH_PROB_THRESHOLD = 0.6;
 const AVG_LOGPROB_THRESHOLD = -1.0;
+const KNOWN_PHRASE_NO_SPEECH_PROB = 0.2; // stricter bar for stock phrases
 const KNOWN_HALLUCINATION_PHRASES = new Set([
   'thank you', 'thank you.', 'thanks for watching', 'thanks for watching!',
   'please subscribe', 'subscribe', 'bye bye', 'thank you for watching',
@@ -197,8 +198,14 @@ const KNOWN_HALLUCINATION_PHRASES = new Set([
 function looksLikeHallucinatedSilence(text, segments) {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return true;
-  if (KNOWN_HALLUCINATION_PHRASES.has(normalized)) return true;
-  if (Array.isArray(segments) && segments.length) {
+  const hasSegments = Array.isArray(segments) && segments.length > 0;
+  // A real "Thank you." (end of an interview!) must survive: only drop a
+  // stock phrase when Whisper itself isn't sure there was speech.
+  if (KNOWN_HALLUCINATION_PHRASES.has(normalized)) {
+    if (!hasSegments) return true;
+    return segments.some((s) => typeof s.no_speech_prob === 'number' && s.no_speech_prob > KNOWN_PHRASE_NO_SPEECH_PROB);
+  }
+  if (hasSegments) {
     const allLowConfidence = segments.every((s) => {
       const noSpeech = typeof s.no_speech_prob === 'number' ? s.no_speech_prob : 0;
       const avgLogprob = typeof s.avg_logprob === 'number' ? s.avg_logprob : 0;
@@ -209,7 +216,7 @@ function looksLikeHallucinatedSilence(text, segments) {
   return false;
 }
 
-async function transcribeAudio({ base64, mimeType }) {
+async function transcribeAudio({ base64, mimeType, signal }) {
   const apiKey = keyStore.getKey('groq');
   if (!apiKey) throw missingKeyError('groq');
   if (!base64) return '';
@@ -235,10 +242,11 @@ async function transcribeAudio({ base64, mimeType }) {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
-      signal: AbortSignal.timeout(STT_TIMEOUT_MS),
+      // Caller signal lets Stop/session end cancel in-flight chunks.
+      signal: combineSignals(signal, STT_TIMEOUT_MS),
     });
   } catch (err) {
-    throw networkError('groq', err);
+    throw networkError('groq', err, signal);
   }
 
   if (!res.ok) throw httpError('groq', res, await readProviderError(res));
@@ -276,36 +284,39 @@ const BANNED_TELLS = `Never use these AI tells: "Great question", "That's a grea
 // Highest-priority rule: sounding human must never mean making things up.
 const GROUNDING = `\nTRUTH FIRST (this overrides every style rule below): only state facts about the user (projects, jobs, schools, tools, numbers, results, stories) that appear in the transcript or in their background material. If a fact isn't there, don't guess: keep it general or use a short [placeholder] they can fill in. The tone examples below use made-up facts purely to show style; never reuse any of their details. For technical facts (APIs, complexities, definitions), say only what you're confident is correct; if unsure, say so in a few words rather than guessing.`;
 
-const HUMAN_VOICE = `\nSound like a real person talking, not like an AI or a cover letter:
-- Use contractions (I'm, I've, it's, didn't, that's) and plain everyday words: "use", not "utilize"; "helped build", not "spearheaded".
-- Keep sentences short and vary their length. A four-word sentence is fine. Talk in the first person ("I", or "we" for a team).
-- Concrete beats polished: name the actual project, tool, number or result instead of a general claim, but ONLY ones that appear in the transcript or the user's background material. If there's no such fact, stay general or use a [placeholder]; never make one up.
-- Now and then (not in every answer) it's fine to open the way people really do: "So,", "Yeah, so", "Honestly,". Most answers should just start with the point.
-- Talk like a smart friend explaining something across a table, not like someone presenting slides. Answer what was actually asked; never repeat the question back.
-- Don't reflexively agree with or praise the other person's point ("Great point", "Totally agree" as a reflex). Agree only when the user actually would, and then say why in a few words.
-- Don't start with the other person's name or with "So basically".
-- Don't make it too tidy. Real answers aren't perfectly symmetrical: don't always give exactly three points, don't make every sentence the same shape, and don't wrap up with a neat moral ("That taught me the value of teamwork"). End on a concrete detail, or just stop.
-- People mention the messy part (what was hard, what went wrong first, what they'd do differently), but only when that detail is in the user's facts. Never invent a struggle, a failure or a lesson to sound real.
-- Say numbers the way people say them out loud: "about a third", "around 200 users", "a couple of weeks", not "33.7%" or "a 2-week period".
-- Light, natural hedging is fine where a person would use it ("I think", "probably", "if I remember right"), but stay confident about the user's own facts and never hedge every sentence.
-- Match how the user actually talks: look at their own "You" lines in the transcript and mirror their vocabulary and how formal or casual they are. Match the other person's tone too (casual chat vs a formal panel).
+// Fewer, positive rules: long "don't" lists make the model perform casualness
+// (every answer opening "Honestly,") and prime the very words they ban. The
+// examples deliberately differ in length, shape and ending so no single
+// template gets copied.
+const HUMAN_VOICE = `\nVOICE. This gets said out loud by the user, so write speech, not writing.
+- The user's own "You" lines in the transcript are the best guide to how they talk. Copy their vocabulary, sentence length and how casual they are, over everything else here. If there are none yet, aim for a relaxed, competent student or engineer. Match the other side's formality too (casual chat vs a formal panel).
+- Write it the way it would sound if they'd thought about it for five seconds: contractions, plain words, the main point first, then the detail that makes it real. Short sentences, uneven lengths, first person ("I", or "we" for a team). A sentence can start with "And" or "But".
+- One idea at a time. People don't list three adjectives or three parallel points; they say one thing, then add the next thing that comes to mind.
+- Concrete over impressive: the actual tool, the actual number, what actually happened, but only ones from their facts (see TRUTH FIRST). Say numbers how people say them ("about a third", "a couple of weeks").
+- Answer the question that was asked, at the size it was asked. A quick question gets one or two lines.
+- No wrap-up. Stop after the last useful detail. No moral, no summary sentence, no "and that's why...".
+- Vary how answers start. Most start with the point itself; only now and then "So," or "Yeah,". Never open by praising the question or repeating it back.
+- Real hedges only where a person would hedge ("I think", "if I remember right"). Be plainly confident about the user's own facts.
+- Agree or disagree the way the user honestly would, with a reason, never as a reflex.
 - ${BANNED_TELLS}
 
-Examples of the difference. They show TONE only: never reuse their facts.
-BEFORE (stiff AI): "Great question! I'm passionate about building robust, scalable, and seamless systems, and I spearheaded a migration that leveraged microservices."
-AFTER (spoken): "So, the one I'm proudest of is moving our payments code off the old monolith.
-I split it into three services over about two months.
-Deploys went from once a week to most days, and the Friday pages stopped."
+Examples. TONE only, the facts are made up: never reuse them. Notice they're all different shapes.
+Q: "Tell me about a project you're proud of."
+"Probably the payments rewrite.
+We had one big service that took a week to deploy, so I split it into three.
+Took about two months, and now we ship most days."
 
-BEFORE (stiff AI): "Certainly. In my previous role, I utilized Python to streamline data workflows — resulting in significant efficiency gains."
-AFTER (spoken): "At my last job I wrote the Python scripts that cleaned our sales data every night.
-It used to take someone half a day by hand.
-After that it just ran on its own."
+Q: "Why did you use a hash map there?"
+"Mainly for the lookups.
+Checking if I've seen a number is constant time instead of scanning the list again."
 
-BEFORE (stiff AI): "Overall, my greatest weakness is that I care deeply about delivering high-quality work."
-AFTER (spoken): "Honestly, I used to say yes to too much.
-Last term I had three projects going at once and one of them slipped.
-Now I check my week before I take anything new on."`;
+Q: "What's your biggest weakness?"
+"I used to say yes to everything.
+Last term that meant one project slipped, and I hated that.
+So now I look at my week before I take anything on."
+
+Q: "Any questions for us?"
+"Yeah, what does the first month look like for someone on this team?"`;
 
 // Answer style (Settings > Answer style; renderer sends answerStyle).
 // SCRIPT: full sentences to read out. CUES: a first line to say, then
@@ -730,7 +741,7 @@ const DEFAULT_THINKING_HEADROOM_TOKENS = 4096;
 
 function answerTokensFor(kind, instruction) {
   if (kind === 'problem' || /```/.test(instruction || '')) return ANSWER_TOKENS.technical;
-  if (instruction) return Math.max(ANSWER_TOKENS.detailed, kind === 'followup' ? ANSWER_TOKENS.followUp : 0);
+  if (instruction) return ANSWER_TOKENS.detailed;
   return kind === 'followup' ? ANSWER_TOKENS.followUp : ANSWER_TOKENS.spoken;
 }
 
@@ -760,7 +771,16 @@ function resetSessionState() {
   session.streamFailures = 0;
 }
 
-function geminiBody(req, withThinking, level = req.thinkingLevel) {
+// Google: Gemini 3 is tuned for the default temperature (1.0); lowering it
+// can cause looping / worse reasoning. So callers' temperatures only apply
+// to older models.
+function generationConfigFor(model, config) {
+  const cfg = { ...(config || {}) };
+  if (supportsThinkingLevel(model)) delete cfg.temperature;
+  return cfg;
+}
+
+function geminiBody(req, withThinking, level = req.thinkingLevel, model = geminiModel()) {
   const headroom = withThinking
     ? THINKING_HEADROOM_TOKENS[level] || DEFAULT_THINKING_HEADROOM_TOKENS
     : DEFAULT_THINKING_HEADROOM_TOKENS;
@@ -768,7 +788,7 @@ function geminiBody(req, withThinking, level = req.thinkingLevel) {
     systemInstruction: { parts: [{ text: req.systemPrompt }] },
     contents: [{ role: 'user', parts: req.parts }],
     generationConfig: {
-      ...(req.generationConfig || {}),
+      ...generationConfigFor(model, req.generationConfig),
       maxOutputTokens: (req.answerTokens || ANSWER_TOKENS.spoken) + headroom,
       ...(withThinking ? { thinkingConfig: { thinkingLevel: level } } : {}),
     },
@@ -804,7 +824,7 @@ async function postGemini(endpoint, req) {
           'x-goog-api-key': apiKey,
           'content-type': 'application/json',
         },
-        body: JSON.stringify(geminiBody(req, withThinking, level)),
+        body: JSON.stringify(geminiBody(req, withThinking, level, model)),
         // Covers the whole response, including reading a stream.
         signal: combineSignals(req.signal, req.timeoutMs),
       });
@@ -1218,11 +1238,20 @@ function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnipp
 }
 
 // First sentence of the headline reply, without wrapping quotes.
+// Don't end the sentence on these ("I'd use e.g. a heap" stays whole).
+const NON_FINAL_ABBREVIATIONS = /(?:^|\s)(?:e\.g|i\.e|etc|vs|approx|mr|mrs|ms|dr|st)\.$/i;
+
 function firstSpokenSentence(text) {
   let t = String(text || '').trim().split('\n').find((l) => l.trim()) || '';
   t = t.trim().replace(/^["'“‘]+/, '');
-  const m = /^(.+?[.!?])["'”’]*(?:\s|$)/.exec(t);
-  return (m ? m[1] : t).replace(/["'”’]+$/, '').trim();
+  const re = /[.!?]["'”’]*(?=\s|$)/g;
+  let m;
+  while ((m = re.exec(t))) {
+    const candidate = t.slice(0, m.index + 1);
+    if (m[0][0] === '.' && NON_FINAL_ABBREVIATIONS.test(candidate)) continue;
+    return candidate.replace(/["'”’]+$/, '').trim();
+  }
+  return t.replace(/["'”’]+$/, '').trim();
 }
 
 // ---- Which model writes the first line ----
@@ -1547,4 +1576,6 @@ module.exports = {
   createSseParser,
   _resetSessionState: resetSessionState,
   _resetHeadlineModel: resetHeadlineModel,
+  _looksLikeHallucinatedSilence: looksLikeHallucinatedSilence,
+  _generationConfigFor: generationConfigFor,
 };

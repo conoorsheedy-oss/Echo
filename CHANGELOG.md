@@ -2,6 +2,12 @@
 
 ## 0.2.0 – unreleased
 
+- **Simpler, more natural voice prompt.** The "sound human" rules are now a short list of positive rules (copy the user's own "You" lines first, one idea at a time, no wrap-up, vary openers) with four question-shaped tone examples of different lengths, instead of a long list of don'ts with BEFORE/AFTER pairs that the model tended to imitate ("Honestly," on every answer). Facts still come only from the transcript or CV (TRUTH FIRST).
+  - Gemini 3 models now run at their default temperature (Google's advice: lower values can cause looping); custom temperatures only apply to older models.
+  - The first line no longer cuts at "e.g." / "i.e." / "vs." etc.
+  - Whisper keeps a real "Thank you." (end of an interview) and only drops stock phrases when it doubts there was speech.
+  - The recorded request-body snapshots (`test/fixtures/prompt-snapshots-2a.json`) were refreshed for the new system prompt; user messages are unchanged.
+
 - **Interview state in answers (Phase 2b).** Interview-mode answers now see what Echo knows about the interview so far, as a compact **INTERVIEW STATE** block (≤ 1500 chars) after the background and before the question. Every line says where it came from: `[Interviewer]`, `[You said]` (your own lines verbatim, and details you actually said: `[You said — confirmed: "hash map"]`), `[From CV: file]`, and `[Echo suggested — not confirmed]` for Echo's earlier answer and code. It holds the current thread (original question, follow-ups, constraints, interviewer facts), what you said in it, Echo's last suggestion (code only for technical threads, elided if long), and one line per other thread; when a question could belong to two threads it lists both readings, and it says when a question refers back to an older thread. When it's too long, whole lines are dropped in a fixed priority order (link uncertainty, the question, what you said, constraints, Echo's suggestion, other threads).
   - **One direction for both answers**: a deterministic `Direction:` line in LATEST, e.g. "follow-up on #1 (two sum) — answer in terms of the approach the candidate described: two pointers [You said]" or "stay with the same story (Kobo [You said]; [From CV: cv.md])". It only uses what you said or your CV, never Echo's unconfirmed suggestion; with no CV it asks for [placeholders].
   - The instant first line gets the same block (trimmed to 900 chars, a subset of the full one) and the same Direction line, computed once per request, so the first sentence and the full answer agree.

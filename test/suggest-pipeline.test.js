@@ -276,6 +276,26 @@ test('firstSpokenSentence strips quotes and extra sentences', () => {
   assert.equal(ai.firstSpokenSentence(''), '');
 });
 
+test('firstSpokenSentence: abbreviations don\'t end the line, a real "no." does', () => {
+  assert.equal(ai.firstSpokenSentence("I'd pick a structure, e.g. a heap. Then pop k times."), "I'd pick a structure, e.g. a heap.");
+  assert.equal(ai.firstSpokenSentence('It works, i.e. linear time. Next part.'), 'It works, i.e. linear time.');
+  assert.equal(ai.firstSpokenSentence("Honestly, no. I'd keep it simple."), 'Honestly, no.');
+});
+
+test('Whisper: a stock phrase is dropped only when Whisper doubts there was speech', () => {
+  const f = ai._looksLikeHallucinatedSilence;
+  assert.equal(f('Thank you.', []), true, 'no segments: treat as noise');
+  assert.equal(f('Thank you.', [{ no_speech_prob: 0.05, avg_logprob: -0.2 }]), false, 'a real thank-you survives');
+  assert.equal(f('Thank you.', [{ no_speech_prob: 0.5, avg_logprob: -0.2 }]), true);
+  assert.equal(f('We used Postgres.', [{ no_speech_prob: 0.05, avg_logprob: -0.2 }]), false);
+});
+
+test('Gemini 3 keeps its default temperature; older models keep the caller\'s', () => {
+  assert.deepEqual(ai._generationConfigFor('gemini-3.5-flash', { temperature: 0.4, responseMimeType: 'application/json' }), { responseMimeType: 'application/json' });
+  assert.deepEqual(ai._generationConfigFor('gemini-2.5-flash', { temperature: 0.4 }), { temperature: 0.4 });
+  assert.deepEqual(ai._generationConfigFor('gemini-3.5-flash', undefined), {});
+});
+
 test('a model without the "minimal" level: the headline retries with low, full answers keep their thinking level', async () => {
   const calls = [];
   global.fetch = async (url, init) => {

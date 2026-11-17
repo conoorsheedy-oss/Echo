@@ -423,8 +423,10 @@ test('system prompt: natural voice, banned AI tells, few-shot examples, CV facts
       assert.ok(system.includes(tell), `${mode}: bans "${tell}"`);
     }
     assert.match(system, /em dash/i);
-    assert.equal((system.match(/BEFORE \(stiff AI\)/g) || []).length, 3, 'three BEFORE/AFTER pairs');
-    assert.equal((system.match(/AFTER \(spoken\)/g) || []).length, 3);
+    // Tone examples are question-shaped and deliberately different lengths.
+    assert.equal((system.match(/^Q: "/gm) || []).length, 4, 'four Q/A tone examples');
+    assert.match(system, /TONE only, the facts are made up: never reuse them/);
+    assert.match(system, /only ones from their facts \(see TRUTH FIRST\)/);
     assert.match(system, /ONLY as a source of facts/);
     assert.match(system, /Never copy its wording/);
   }
@@ -438,17 +440,19 @@ test('mode prompts: the shared core appears once in every mode, plus that mode\'
   for (const style of ['script', 'cues']) {
     for (const mode of MODE_LIST) {
       const system = ai.buildSystemPrompt(mode, style);
-      for (const core of ['TRUTH FIRST (this overrides', 'Sound like a real person talking', `Answer style: ${style.toUpperCase()}`, 'What you are given: the WHOLE conversation', 'One or more attached screen images', 'ONLY as a source of facts']) {
+      for (const core of ['TRUTH FIRST (this overrides', 'VOICE. This gets said out loud', `Answer style: ${style.toUpperCase()}`, 'What you are given: the WHOLE conversation', 'One or more attached screen images', 'ONLY as a source of facts']) {
         assert.equal(count(system, core), 1, `${mode}/${style}: "${core}" once`);
       }
-      assert.equal(count(system, 'BEFORE (stiff AI)'), 3, `${mode}/${style}: tone examples once`);
+      assert.equal(count(system, 'Q: "Tell me about a project'), 1, `${mode}/${style}: tone examples once`);
       const blocks = { interview: 'Interview rules:', meeting: 'Meeting rules.', presentation: 'Presentation rules:', general: 'Conversation rules:' };
       for (const [m, heading] of Object.entries(blocks)) {
         assert.equal(count(system, heading), m === mode ? 1 : 0, `${mode}/${style}: ${heading}`);
       }
       // New shared voice rules.
-      assert.match(system, /Don't reflexively agree with or praise the other person's point/);
-      assert.match(system, /Don't start with the other person's name or with "So basically"/);
+      assert.match(system, /never as a reflex/);
+      assert.match(system, /Never open by praising the question or repeating it back/);
+      assert.match(system, /No wrap-up/);
+      assert.match(system, /first person/);
       for (const tell of ['Great point', "That's a great question", 'I completely agree']) assert.ok(system.includes(tell), `${mode}: bans ${tell}`);
     }
   }
