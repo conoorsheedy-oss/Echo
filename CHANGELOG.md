@@ -8,6 +8,8 @@
   - Coding and system design rounds think at `medium` on technical follow-ups (Quality = Auto).
   - Behavioural questions get one extra CV snippet that best matches the role.
   - Saved locally in `interview-brief.json`; Diagnostics > Thread shows what's in use.
+  - The Ask panel gets the brief too (Interview mode).
+- **Follow-up detection:** after code, short questions about complexity, edge cases, trade-offs or tests ("what is the complexity of that?") now count as technical follow-ups, not new general questions.
 
 - **Simpler, more natural voice prompt.** The "sound human" rules are now a short list of positive rules (copy the user's own "You" lines first, one idea at a time, no wrap-up, vary openers) with four question-shaped tone examples of different lengths, instead of a long list of don'ts with BEFORE/AFTER pairs that the model tended to imitate ("Honestly," on every answer). Facts still come only from the transcript or CV (TRUTH FIRST).
   - Gemini 3 models now run at their default temperature (Google's advice: lower values can cause looping); custom temperatures only apply to older models.

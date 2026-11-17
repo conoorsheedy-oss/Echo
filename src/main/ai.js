@@ -1450,13 +1450,15 @@ async function generateHeadline(params) {
 }
 
 async function askFollowUp({
-  transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, signal, onChunk,
+  transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, brief, signal, onChunk,
 }) {
   const hasImages = !!(images && images.length);
   const kind = classifyQuestion(question, { hasImages, ...priorContext(previousAnswers) });
   const thinkingLevel = resolveThinkingLevel({ mode, quality, kind });
   const technical = kind === 'problem' || looksTechnical(question);
-  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, userQuestion: question, images });
+  // Interview mode: the same brief block as the answers ("what should I ask them?").
+  const { block: briefBlock } = briefFor(normalizeMode(mode), brief);
+  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, userQuestion: question, images, briefBlock });
   const result = await callGemini({
     systemPrompt: ASK_SYSTEM_PROMPT,
     parts: buildUserParts(conversation, images),

@@ -1050,6 +1050,7 @@ handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAn
       quality: q,
       images: preparedImages,
       knowledgeSnippets,
+      brief: safeMode === 'interview' ? briefStore.plan() : null,
       signal: req.signal,
       onChunk: chunkForwarder(evt, id),
     });

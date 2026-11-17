@@ -130,7 +130,9 @@
   // "find" or "return" ("what if we need to return all pairs?").
   const FOLLOWUP_OPENER_RE = /^(?:(?:so|ok(?:ay)?|and|right|cool|great|nice|alright|got it|thanks|sure|interesting|hmm|um|uh|yeah|now)[,.]?\s+)*(?:why|what if|what happens|what would happen|what about|how about|what'?s the (?:time|space|runtime|big)|what is the (?:time|space|runtime|big)|how (?:would|could|do|did|will) you (?:test|handle|deal|verify|debug|optimi[sz]e|improve|scale|extend|change)|(?:can|could) you (?:explain|walk|talk|tell|optimi[sz]e|improve|clarify)|is there|are there|any (?:edge|corner|other|better)|does (?:it|this|that|your)|would (?:it|this|that|your)|will (?:it|this|that|your)|walk me through (?:your|the|this|that|it)|talk me through (?:your|the|this|that|it)|explain (?:your|the|this|that|why|how))\b/i;
   // Plain words that, after a technical answer, still point at the code.
-  const CODE_REFERENCE_RE = /\b(inputs?|outputs?|returns?|pairs?|elements?|values?|null|empty|duplicates?|negative|overflow|memory|loops?|index|indices|(your|the|this|that)( current)? (code|solution|approach|function|implementation|algorithm|method))\b/i;
+  // Also the words of a technical follow-up that don't look technical on
+  // their own ("what is the complexity of that?", "any trade-offs?").
+  const CODE_REFERENCE_RE = /\b(inputs?|outputs?|returns?|pairs?|elements?|values?|null|empty|duplicates?|negative|overflow|memory|loops?|index|indices|complexit(?:y|ies)|big[- ]?o|runtime|(?:edge|corner) cases?|trade-?offs?|test cases?|unit tests?|(your|the|this|that)( current)? (code|solution|approach|function|implementation|algorithm|method))\b/i;
   const FOLLOWUP_MAX_WORDS = 25; // a short question that references earlier work
   const LONG_PROBLEM_WORDS = 40; // a long technical prompt reads as a problem statement
 

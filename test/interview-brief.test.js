@@ -261,6 +261,20 @@ test('ai.js ignores a malformed brief', async () => {
   }
 });
 
+test('Ask panel: interview mode gets the brief at the top; other modes and no brief unchanged', async () => {
+  const brief = planOf({ companyRole: 'Stripe, SWE intern', notes: 'Notice period: 2 weeks' });
+  const ask = async (extra) => {
+    const calls = captureFetch();
+    await ai.askFollowUp({ transcript: 'Them: Any questions for us?', question: 'What should I ask them?', mode: 'interview', ...extra });
+    return calls[0];
+  };
+  const withBrief = await ask({ brief });
+  assert.ok(firstText(withBrief.body).startsWith(brief.block));
+  const plain = await ask({});
+  assert.equal((await ask({ brief: null })).raw, plain.raw);
+  assert.equal((await ask({ mode: 'meeting', brief })).raw, (await ask({ mode: 'meeting' })).raw);
+});
+
 // ---- 3. the job ad summary call ----
 
 test('summarizeJobAd: one non-streaming call, ad-only prompt, cleaned and capped', async () => {

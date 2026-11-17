@@ -692,6 +692,10 @@ const FOLLOW_UPS = [
 ];
 // Plain-word follow-ups: only follow-ups when the last answer was technical.
 const PLAIN_FOLLOW_UPS = [
+  'What is the complexity of that?',
+  'Any trade-offs?',
+  'Are there any edge cases?',
+  'How would you write test cases for it?',
   'What happens if the input is empty?',
   'How would you handle really large inputs that do not fit in memory with your current approach?',
   'Okay, what if we need to return all the pairs instead of just one?',
