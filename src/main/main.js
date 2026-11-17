@@ -1088,9 +1088,22 @@ handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAn
   const preparedImages = privacyModeEnabled ? undefined : prepareImages(images);
   const knowledgeSnippets = knowledge.searchKnowledge(question);
 
+  // Interview mode: a typed behavioural question ("tell me about a time you
+  // led a team") gets the story bank, like a spoken one.
+  const briefPlan = safeMode === 'interview' ? briefStore.plan() : null;
+  let storyPlan = null;
+  if (safeMode === 'interview') {
+    try {
+      const analysis = ai.analyzeSuggestion({ transcript, mode: safeMode, question, previousAnswers: prior, images: preparedImages });
+      storyPlan = planStories({ params: { mode: safeMode, question }, plan: null, analysis, briefPlan });
+    } catch (err) {
+      storyPlan = null;
+    }
+  }
+
   const req = aiRequests.start('ask', id, 'explicit');
   try {
-    return await ai.askFollowUp({
+    const answer = await ai.askFollowUp({
       transcript,
       question,
       mode: safeMode,
@@ -1098,10 +1111,13 @@ handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAn
       quality: q,
       images: preparedImages,
       knowledgeSnippets,
-      brief: safeMode === 'interview' ? briefStore.plan() : null,
+      brief: briefPlan,
+      stories: storyPlan ? { block: storyPlan.block, headlineLine: storyPlan.headlineLine } : null,
       signal: req.signal,
       onChunk: chunkForwarder(evt, id),
     });
+    if (storyPlan && typeof answer === 'string') storyStore.noteAnswer(storyPlan, question, answer);
+    return answer;
   } finally {
     req.done();
   }

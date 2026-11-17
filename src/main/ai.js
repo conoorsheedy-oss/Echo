@@ -284,7 +284,7 @@ const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You"
 const BANNED_TELLS = `Never use these AI tells: "Great question", "That's a great question", "Great point", "I completely agree", "Certainly", "Absolutely", "I'd be happy to", "leverage", "delve", "utilize", "passionate about", "spearheaded", "synergy", "robust", "seamless", "cutting-edge", "game-changer", "it's worth noting", "in summary", "in conclusion", "overall", "furthermore", "moreover", "additionally", "I'm excited to", "thrilled", "a testament to", "navigate", "foster", "holistic", "dive into", "key takeaway", "in today's fast-paced world", "Not only X but also Y" constructions, and neat lists of three adjectives ("fast, scalable and reliable"). Never use em dashes (—): use a comma or a full stop, or start a new sentence.`;
 
 // Highest-priority rule: sounding human must never mean making things up.
-const GROUNDING = `\nTRUTH FIRST (this overrides every style rule below): only state facts about the user (projects, jobs, schools, tools, numbers, results, stories) that appear in the transcript or in their background material. If a fact isn't there, don't guess: keep it general or use a short [placeholder] they can fill in. The tone examples below use made-up facts purely to show style; never reuse any of their details. For technical facts (APIs, complexities, definitions), say only what you're confident is correct; if unsure, say so in a few words rather than guessing.`;
+const GROUNDING = `\nTRUTH FIRST (this overrides every style rule below): only state facts about the user (projects, jobs, schools, tools, numbers, results, stories) that appear in the transcript or in their background material. If a fact isn't there, don't guess: keep it general or use a short [placeholder] they can fill in. Never add a setback, a struggle, a team size, a duration, a number or a "what it led to" just to make a story sound real. The tone examples below use made-up facts purely to show style; never reuse any of their details. For technical facts (APIs, complexities, definitions), say only what you're confident is correct; if unsure, say so in a few words rather than guessing.`;
 
 // Fewer, positive rules: long "don't" lists make the model perform casualness
 // (every answer opening "Honestly,") and prime the very words they ban. The
@@ -429,7 +429,12 @@ const MODE_INTROS = {
 };
 
 const ASK_SYSTEM_PROMPT = `You are a live conversation co-pilot's chat panel. The user is asking you a quick question about their current live conversation. Answer directly and completely using the transcript, the user's own background material, and any attached screenshots (whichever are present) for context. If the answer calls for code or a full explanation, give the complete version rather than a truncated one. You get the whole conversation so far (oldest first), the answers already given in this session, and the user's question at the end under "LATEST". Use the earlier context for follow-ups ("what did they mean earlier?", "expand on your last answer").
+${GROUNDING}
 Write the way a sharp friend would reply: plain words, contractions, short sentences, straight to the point, no preamble. If you suggest something for the user to say, write it the way they'd actually say it out loud, in the first person.
+When the user types a question for you to answer AS THEM (an interview question like "tell me about something you're proud of", or "what should I say?"), reply with only the words they'd say out loud:
+- No intro line ("Here's an answer you can give"), no quotation marks around it, no closing moral or lesson ("It showed me how to...", "It was really rewarding..."). Stop after the last real detail.
+- The size of a real spoken answer: a one-line headline, then 2-4 short lines; a behavioural story stays under about 45 seconds. Longer only if they ask for it.
+- One real story from their files or the transcript (if a STORY BANK is given, use one of its stories). Every fact must be in that material: no extra numbers, team sizes, durations, results, setbacks or "what changed after" that it doesn't state. If a detail isn't there, leave it out or use a short [placeholder].
 ${BANNED_TELLS}
 If background files from the user (CV/notes) are included, use them only for facts and never copy their wording.`;
 
@@ -1467,7 +1472,7 @@ async function generateHeadline(params) {
 }
 
 async function askFollowUp({
-  transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, brief, signal, onChunk,
+  transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, brief, stories, signal, onChunk,
 }) {
   const hasImages = !!(images && images.length);
   const kind = classifyQuestion(question, { hasImages, ...priorContext(previousAnswers) });
@@ -1475,7 +1480,9 @@ async function askFollowUp({
   const technical = kind === 'problem' || looksTechnical(question);
   // Interview mode: the same brief block as the answers ("what should I ask them?").
   const { block: briefBlock } = briefFor(normalizeMode(mode), brief);
-  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, userQuestion: question, images, briefBlock });
+  // Interview mode: a typed behavioural question gets the story bank too.
+  const { block: storyBlock } = storiesFor(normalizeMode(mode), stories);
+  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, userQuestion: question, images, briefBlock, storyBlock });
   const result = await callGemini({
     systemPrompt: ASK_SYSTEM_PROMPT,
     parts: buildUserParts(conversation, images),

@@ -2,6 +2,8 @@
 
 ## 0.2.0 – unreleased
 
+- **Ask panel answers like the answer card.** Typing an interview question into Ask ("tell me about something you're proud of") now gets a spoken answer: no "Here's an answer you can give" intro, no quotes around it, no closing moral, about 45 seconds at most, facts only from your files (the Ask panel now has the same TRUTH FIRST rule), and in Interview mode the story bank. Every prompt's TRUTH FIRST rule now also forbids adding a setback, team size, duration, number or "what it led to" to make a story sound real.
+
 - **CV story bank.** Echo reads your knowledge files once (and again only when they change) and pulls out your real stories. Every quote is checked word for word against the files and any number that isn't in them is dropped, so invented details don't get in. In Interview mode a new behavioural question gets the 2 best-fitting stories (theme, the question's words, the role from the brief), preferring ones you haven't told yet this session; the first line opens with the top one. On by default; switch it off in the Knowledge drawer (then your files are never sent whole). The drawer lists the stories found.
 
 - **Interview brief.** A new dock drawer where you tell Echo what you have before an interview, all optional: company and role, the job ad, the interview type (Behavioural / Coding / System design / Recruiter-HR screen / Mixed / Auto) and notes. Interview mode only; an empty brief changes nothing.

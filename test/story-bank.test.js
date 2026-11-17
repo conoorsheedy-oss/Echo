@@ -295,3 +295,25 @@ test('no stories, a malformed value, or another mode: requests unchanged', async
   const meeting = { ...params, mode: 'meeting' };
   assert.deepEqual((await suggest({ ...meeting, stories: { block: 'STORY BANK x', headlineLine: 'y' } })).map((c) => c.raw).sort(), (await suggest(meeting)).map((c) => c.raw).sort());
 });
+
+test('Ask panel: grounding + spoken-answer rules; a typed behavioural question gets the story bank (Interview only)', async () => {
+  const store = createStoryStore({ file: tmpFile(), extract: async () => RAW, getDocuments: () => DOCS, log: quiet });
+  await store.rebuild();
+  const plan = store.plan({ question: 'Tell me about a time you led a team.' });
+  const ask = async (extra) => {
+    const calls = captureFetch();
+    await ai.askFollowUp({ transcript: '', question: 'Tell me about a time you led a team.', mode: 'interview', ...extra });
+    return calls[0];
+  };
+  const withStories = await ask({ stories: { block: plan.block, headlineLine: plan.headlineLine } });
+  const sys = withStories.body.systemInstruction.parts[0].text;
+  assert.match(sys, /TRUTH FIRST/);
+  assert.match(sys, /No intro line \("Here's an answer you can give"\), no quotation marks around it, no closing moral/);
+  assert.match(sys, /no extra numbers, team sizes, durations, results, setbacks/);
+  const text = allText(withStories.body);
+  assert.ok(text.includes(plan.block));
+  assert.ok(!text.includes('No background about the user was provided'));
+  const plain = await ask({});
+  assert.ok(!allText(plain.body).includes('STORY BANK'));
+  assert.equal((await ask({ mode: 'meeting', stories: { block: plan.block } })).raw, (await ask({ mode: 'meeting' })).raw);
+});
