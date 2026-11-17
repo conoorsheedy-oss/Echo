@@ -218,7 +218,7 @@ function looksLikeHallucinatedSilence(text, segments) {
   return false;
 }
 
-async function transcribeAudio({ base64, mimeType, signal }) {
+async function transcribeAudio({ base64, mimeType, signal, prompt }) {
   const apiKey = keyStore.getKey('groq');
   if (!apiKey) throw missingKeyError('groq');
   if (!base64) return '';
@@ -237,6 +237,9 @@ async function transcribeAudio({ base64, mimeType, signal }) {
   // avg_logprob for looksLikeHallucinatedSilence().
   form.append('response_format', 'verbose_json');
   form.append('temperature', '0');
+  // The user's own terms (stt-vocab.js), so names and specs are spelled right.
+  const cleanPrompt = typeof prompt === 'string' ? prompt.trim().slice(0, 900) : '';
+  if (cleanPrompt) form.append('prompt', cleanPrompt);
 
   let res;
   try {
@@ -261,6 +264,8 @@ async function transcribeAudio({ base64, mimeType, signal }) {
   }
   const text = (data && typeof data.text === 'string' ? data.text : '').trim();
   if (looksLikeHallucinatedSilence(text, data && data.segments)) return '';
+  // Whisper sometimes "transcribes" its prompt over silence.
+  if (cleanPrompt && /\bjob interview\.?\s*terms\b|^terms:/i.test(text)) return '';
   return text;
 }
 
@@ -276,7 +281,7 @@ const SCREEN_NOTE = `\nOne or more attached screen images may be included (in th
 const KNOWLEDGE_NOTE = `\nBackground material about the user may be included, pulled from their own CV/notes/project files. Use it ONLY as a source of facts: which projects, employers, tools, numbers and results are real. Never copy its wording or phrasing. CVs and notes are often written in stiff, polished, AI-style language ("spearheaded", "leveraged", "passionate about", "drove cross-functional synergy"), and the user has to sound like themselves talking. Re-say every fact in plain spoken words, the way they'd tell a friend. Prefer these real facts over generic knowledge, and never invent details, projects, or experience beyond what's given there or stated in the transcript.`;
 
 // What every suggest/ask request carries -- see buildConversation().
-const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You" = the user, "Them" = the other side, oldest first; it is auto-transcribed, so expect small errors), the answers already suggested earlier in this session, any background and screenshots, and -- at the very end, under "LATEST" -- the last few lines and the question to answer now. Answer the latest question. Use the earlier conversation for continuity: "expand on that" or "going back to earlier" refer to what was said or answered before. Don't repeat an earlier answer word for word; build on it.`;
+const CONTEXT_NOTE = `\nWhat you are given: the WHOLE conversation so far ("You" = the user, "Them" = the other side, oldest first; it is auto-transcribed, so expect small errors: when a word looks like a mis-hearing of a name or term in the user's background or the question, e.g. "SP 822" for "SP 800-22", use the correct one and never repeat the garbled version), the answers already suggested earlier in this session, any background and screenshots, and -- at the very end, under "LATEST" -- the last few lines and the question to answer now. Answer the latest question. Use the earlier conversation for continuity: "expand on that" or "going back to earlier" refer to what was said or answered before. Don't repeat an earlier answer word for word; build on it.`;
 
 // Words and patterns that make an answer sound machine-written when said
 // out loud. humanize.js also strips em dashes and stock openers afterwards,
@@ -327,7 +332,7 @@ const ANSWER_STYLES = new Set(['script', 'cues']);
 
 const SCRIPT_STYLE = `\nAnswer style: SCRIPT. The user will say this out loud, glancing at it mid-conversation:
 - Start with ONE short headline sentence that directly answers the question, in the user's own voice, on its own line, followed by a blank line. It should work on its own if that's all they manage to say.
-- Then 1-3 more short spoken sentences, ONE sentence per line (a line break after every sentence). Nothing the user would stumble over saying. No menu of options.
+- Then 1-3 more short spoken sentences, ONE sentence per line (a line break after every sentence), each under about 15 words so it can be said after one glance. One idea per line. Nothing the user would stumble over saying. No menu of options.
 - When relevant, include a concrete result or outcome (a number, what changed, what it led to).
 - Minimal formatting: plain sentences. No headings, no bullet lists, no tables, no LaTeX. You may **bold** one or two key words (never whole sentences).
 - Never invent projects, employers, numbers or experience that aren't in the transcript or the user's background material. If a detail is missing, keep it general.`;
@@ -348,9 +353,10 @@ Example of the format (facts made up, never reuse them):
 const TECHNICAL_STYLE = `\nCoding, maths, probability, puzzles and system design (in either answer style). There are two kinds of technical question, and they get different formats. These rules override the format rules above for these questions only.
 A) A NEW problem to solve (a coding task, a maths/probability question, a puzzle, "design a system"). Interviewers want to hear HOW the user thinks, not just the final answer, so show the thought process the user can say out loud while working:
 1. Line 1: a one-line spoken summary of the approach (what the user would say first), then a blank line.
-2. A short "thinking out loud" walk-through as a numbered list (3-5 items, each one short spoken line in the user's voice, no long explanations). For code, roughly: what the input/output is and any edge case worth checking; the simple brute-force idea and why it's too slow (with its complexity); the key insight that makes it better; the plan for the final approach. For maths/probability: what's being asked, the setup, then the key steps. For system design: the requirements to confirm, the core components, the main trade-off.
+2. A short "thinking out loud" walk-through as a numbered list (3-4 items). Each item starts with a **bold cue of 1-3 words** (e.g. **Brute force**, **Key insight**, **Storage**), then one short spoken line in the user's voice, under about 12 words, so the user can glance at the cue and say it in their own words. Never write "first", "second", "then three": each item must make sense on its own. For code, roughly: what the input/output is and any edge case worth checking; the simple brute-force idea and why it's too slow (with its complexity); the key insight that makes it better; the plan for the final approach. For maths/probability: what's being asked, the setup, then the key steps. For system design: the requirements to confirm, the core components, the main trade-off.
 3. Then what's needed to actually solve it: for code, ONE complete, correct code block in the language (and method signature) shown on screen if there is one, nothing left out; for maths/probability, the final answer with the number; for design, the final design in a few short lines.
 4. End with one line on time/space complexity where it applies, and optionally one line on how to quickly test it with a small example.
+Trade-offs: one plain contrast the user can say in one breath ("A sliding log is exact but stores every timestamp, so I'd use a counter"), never a list of pros and cons. Formulas and counters: say the formula in words once, and double-check it and every increment / decrement before writing it; a wrong sign or weight is worse than no formula.
 B) A FOLLOW-UP about a solution or code already discussed ("why did you use X", "what if the input is empty", "what's the complexity", "how would you test it", "any edge cases", "can you explain this part"), or a quick conceptual question. Answer it like a person in the room would: the headline sentence with the direct answer, then 1-3 short spoken lines with the reasoning. No numbered walk-through, and don't repeat the full code. Only if the answer changes the code, add one tiny code block with just the changed lines. Use the earlier answers in this session to know what the code is.
 Keep every line plain and spoken (same voice rules as above). In CUES style, keep the numbered steps as short fragments rather than sentences.`;
 
@@ -596,11 +602,19 @@ const INTENT_HINTS = {
 const OTHER_MODE_PROBLEM_HINT = 'Question type: a technical problem to solve. Give the approach in the first line, then the complete code or final answer, then a line on complexity if it applies.';
 const AUTO_NO_RESPONSE_HINT = `This suggestion was triggered automatically (the user didn't ask for it). If there is genuinely nothing useful for the user to say here, reply with exactly ${NO_RESPONSE_SENTINEL} and nothing else.`;
 
+// "Do you have any questions for me / us?" at the end of an interview.
+const INVITES_QUESTIONS_RE = /\b(?:any|some|other|more|final|last)\s+questions?\s+(?:for\s+(?:me|us|the team|them)|about\s+(?:the\s+)?(?:role|company|team|position|job|us|me))\b|\b(?:anything|something)\s+(?:else\s+)?you(?:'d| would)?\s+(?:like|want)\s+to\s+ask(?:\s+(?:me|us))?\s*[?.!]*\s*$|\bwhat\s+questions\s+(?:do\s+you\s+have|have\s+you\s+got)\s+for\s+(?:me|us)\b|\b(?:do\s+you\s+have|got)\s+(?:any\s+)?questions\s*[?.!]*\s*$/i;
+function invitesQuestions(question) {
+  return INVITES_QUESTIONS_RE.test(String(question || ''));
+}
+const ASK_THEM_HINT = "They're inviting the user's questions. Never say there are none. Give 2 short, genuine questions the user could ask, one per line (about the team, the day-to-day work, what success looks like in the first months, or what the interviewer enjoys about working there), tailored to the role in the brief if there is one. Don't state facts about the company that aren't in the brief or the conversation.";
+
 // The per-request format hints for LATEST (full answer).
-function latestHints({ mode, kind, intent, allowNoResponse }) {
+function latestHints({ mode, kind, intent, allowNoResponse, question }) {
   const hints = [];
   if (!mode || mode === 'interview') {
-    if (kind && KIND_HINTS[kind]) hints.push(KIND_HINTS[kind]);
+    if (invitesQuestions(question)) hints.push(ASK_THEM_HINT);
+    else if (kind && KIND_HINTS[kind]) hints.push(KIND_HINTS[kind]);
     return hints;
   }
   if (kind === 'problem') hints.push(OTHER_MODE_PROBLEM_HINT);
@@ -649,7 +663,7 @@ function buildConversation({ transcript, previousAnswers, knowledgeSnippets, que
   else latest += '\n\nAnswer whatever was most recently asked or said above.';
   if (direction) latest += `\n\n${direction}`;
   if (instruction) latest += `\n\nAdditional instruction from the user: ${instruction}`;
-  for (const hint of latestHints({ mode, kind, intent, allowNoResponse })) latest += `\n\n${hint}`;
+  for (const hint of latestHints({ mode, kind, intent, allowNoResponse, question })) latest += `\n\n${hint}`;
   return { context, latest };
 }
 
@@ -1269,7 +1283,8 @@ function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnipp
   else latest += '\n\nAnswer whatever was most recently asked or said above.';
   if (direction) latest += `\n\n${direction}`;
   if (instruction) latest += `\n\nAdditional instruction from the user: ${instruction}`;
-  if (kind === 'problem') latest += '\n\nThis is a new problem to solve.';
+  if ((!mode || mode === 'interview') && invitesQuestions(question)) latest += "\n\nThey're inviting the user's questions: give the first good question the user could ask them (never \"no questions\").";
+  else if (kind === 'problem') latest += '\n\nThis is a new problem to solve.';
   else if (kind === 'followup') latest += '\n\nThis is a follow-up about what was already discussed.';
   if (mode && mode !== 'interview') {
     if (intent && Object.prototype.hasOwnProperty.call(INTENT_HINTS, intent)) latest += `\n\n${INTENT_HINTS[intent]}`;
@@ -1697,6 +1712,7 @@ module.exports = {
   askFollowUp,
   summarizeSession,
   summarizeJobAd,
+  invitesQuestions,
   extractStories,
   storiesFor,
   briefFor,

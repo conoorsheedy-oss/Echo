@@ -47,6 +47,8 @@ function defaultWebSocket() {
 function createDeepgramManager(deps = {}) {
   const WS = deps.WebSocket || defaultWebSocket();
   const getKey = deps.getKey || (() => '');
+  // The user's own terms for Nova-3 keyterm prompting (stt-vocab.js).
+  const getKeyterms = deps.getKeyterms || (() => []);
   const now = deps.now || Date.now;
   const setT = deps.setTimeout || setTimeout;
   const clearT = deps.clearTimeout || clearTimeout;
@@ -148,7 +150,9 @@ function createDeepgramManager(deps = {}) {
 
       let ws;
       try {
-        ws = new WS(core.buildListenUrl({ model: model(), language: language(), endpointingMs: endpointingMs() }), {
+        let keyterms = [];
+        try { keyterms = getKeyterms() || []; } catch (e) { keyterms = []; }
+        ws = new WS(core.buildListenUrl({ model: model(), language: language(), endpointingMs: endpointingMs(), keyterms }), {
           headers: core.authHeaders(key),
           handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
           perMessageDeflate: false,

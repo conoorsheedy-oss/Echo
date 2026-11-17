@@ -62,7 +62,24 @@ function cleanEndpointing(value) {
   return Math.min(MAX_ENDPOINTING_MS, Math.max(MIN_ENDPOINTING_MS, Number(raw)));
 }
 
-function buildListenUrl({ model, language, sampleRate = SAMPLE_RATE, endpointingMs = ENDPOINTING_MS } = {}) {
+// Nova-3 keyterm prompting (English): one `keyterm` parameter per term, so
+// the user's own names and specs are spelled right. Other models ignore it,
+// so it's only sent to nova-3.
+const MAX_KEYTERMS = 40;
+const MAX_KEYTERM_CHARS = 40;
+function cleanKeyterms(keyterms, model, language) {
+  if (!Array.isArray(keyterms) || !/^nova-3/.test(model) || !/^(en|multi)/.test(language)) return [];
+  const out = [];
+  for (const t of keyterms) {
+    const s = typeof t === 'string' ? t.replace(/\s+/g, ' ').trim() : '';
+    if (!s || s.length > MAX_KEYTERM_CHARS || out.includes(s)) continue;
+    out.push(s);
+    if (out.length >= MAX_KEYTERMS) break;
+  }
+  return out;
+}
+
+function buildListenUrl({ model, language, sampleRate = SAMPLE_RATE, endpointingMs = ENDPOINTING_MS, keyterms } = {}) {
   const params = new URLSearchParams({
     model: cleanModel(model),
     language: cleanLanguage(language),
@@ -75,6 +92,7 @@ function buildListenUrl({ model, language, sampleRate = SAMPLE_RATE, endpointing
     sample_rate: String(sampleRate),
     channels: '1',
   });
+  for (const term of cleanKeyterms(keyterms, params.get('model'), params.get('language'))) params.append('keyterm', term);
   return `${DEEPGRAM_LISTEN_URL}?${params.toString()}`;
 }
 

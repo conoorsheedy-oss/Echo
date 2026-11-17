@@ -176,6 +176,7 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
 | Audio chunks (mic + system audio) | **Groq**, with your key | While listening (Speech-to-text = Groq, or as Deepgram's fallback) |
 | Live audio stream (mic + system audio, only while someone is talking) | **Deepgram** ([console.deepgram.com](https://console.deepgram.com)), with your key | While listening with Speech-to-text = Deepgram |
 | Transcript, your questions, matched knowledge snippets | **Google Gemini**, with your key | When an answer, chat reply or summary is requested |
+| Names and technical terms from your knowledge files and brief (at most 40, never sentences) | **Deepgram** / **Groq**, with your key | With each speech-to-text stream / chunk, so they're spelled right |
 | Your knowledge files (up to ~30k characters) | **Google Gemini**, with your key | Once each time they change, to build the story bank (switch it off in the Knowledge drawer and they never are) |
 | Interview brief (company, role, job ad, notes) | **Google Gemini**, with your key | With Interview-mode answers, and the job ad once when you save it (to condense it) |
 | Screenshots in the tray | **Google Gemini**, with your key | With the next answer or question (never in Privacy Mode) |

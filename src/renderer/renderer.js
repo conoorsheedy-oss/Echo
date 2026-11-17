@@ -2345,13 +2345,19 @@ function streamView(req) {
   return null;
 }
 
-function showGrounding(groundingFiles) {
-  if (!Array.isArray(groundingFiles) || !groundingFiles.length) {
+// story: { title, source } when the answer told a story from the story bank.
+function showGrounding(groundingFiles, story) {
+  const parts = [];
+  if (story && typeof story.title === 'string' && story.title) {
+    parts.push(`Your story: ${story.title}${story.source ? ` (${story.source})` : ''}`);
+  }
+  if (Array.isArray(groundingFiles) && groundingFiles.length) parts.push(`Grounded in: ${groundingFiles.join(', ')}`);
+  if (!parts.length) {
     suggestionGrounding.classList.add('hidden');
     suggestionGrounding.textContent = '';
     return;
   }
-  suggestionGrounding.textContent = `Grounded in: ${groundingFiles.join(', ')}`;
+  suggestionGrounding.textContent = parts.join(' · ');
   suggestionGrounding.classList.remove('hidden');
 }
 
@@ -2366,7 +2372,7 @@ function displayAnswer(answer, { resetScroll = true, remember = true } = {}) {
   suggestionText.classList.remove('hidden');
   suggestionActions.classList.remove('hidden');
   renderAnswerText(answer.text, answer.style);
-  showGrounding(answer.groundingFiles);
+  showGrounding(answer.groundingFiles, answer.story);
   if (resetScroll) suggestionBodyEl.scrollTop = 0;
   if (remember) rememberAnswer('suggestion', answer.question, answer.text);
 }
@@ -2910,6 +2916,7 @@ async function requestSuggestion(instruction, opts = {}) {
       text: Intent.isNoResponse(rawText) ? 'Nothing obvious to add here yet. Try Regenerate.' : (rawText || '(no suggestion returned)'),
       question: questionLine,
       groundingFiles: isObj ? result.groundingFiles : undefined,
+      story: isObj && result.story && typeof result.story === 'object' ? result.story : undefined,
       style: (isObj && result.answerStyle) || req.answerStyle,
     };
     dropPendingStream(req);

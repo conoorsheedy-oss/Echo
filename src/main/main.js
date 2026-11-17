@@ -34,11 +34,16 @@ const { createDeepgramManager } = require('./deepgram');
 const interviewSession = require('./interview-session');
 const { createBriefStore } = require('./brief-store');
 const { createStoryStore } = require('./story-store');
+const sttVocab = require('./stt-vocab');
+const crypto = require('crypto');
 const interviewBrief = require('./interview-brief');
 
 // Optional Deepgram live speech-to-text (Settings > Speech-to-text). The
 // sockets live here so the key never reaches the renderer (deepgram.js).
-const deepgram = createDeepgramManager({ getKey: (provider) => keyStore.getKey(provider) });
+const deepgram = createDeepgramManager({
+  getKey: (provider) => keyStore.getKey(provider),
+  getKeyterms: () => sttTerms(),
+});
 
 // The only external pages the app may open (Settings > "Get a free key").
 // The renderer asks by name; it can't pass an arbitrary URL.
@@ -137,6 +142,24 @@ const storyStore = createStoryStore({
   extract: (opts) => ai.extractStories(opts),
   getDocuments: () => knowledge.getDocuments(),
 });
+
+// Speech-to-text vocabulary: the user's own terms from the knowledge files
+// and the brief (stt-vocab.js), for Deepgram keyterms and the Whisper
+// prompt. Recomputed only when the files or the brief change.
+let sttVocabCache = { key: null, terms: [] };
+function sttTerms() {
+  try {
+    const docs = knowledge.getDocuments();
+    const brief = briefStore.get().brief;
+    const key = crypto.createHash('sha256')
+      .update(JSON.stringify([docs.map((d) => [d.source, d.text]), brief]))
+      .digest('hex');
+    if (key !== sttVocabCache.key) sttVocabCache = { key, terms: sttVocab.extractVocabulary({ documents: docs, brief }) };
+    return sttVocabCache.terms;
+  } catch (err) {
+    return [];
+  }
+}
 
 function planStories({ params, plan, analysis, briefPlan }) {
   if (params.mode !== 'interview' || !params.question || params.instruction || !analysis) return null;
@@ -847,7 +870,7 @@ handle('stt:transcribe', async (_evt, { base64, mimeType, speaker } = {}) => {
   if (speaker !== 'You' && speaker !== 'Them') {
     throw new Error('Invalid speaker.');
   }
-  const text = await ai.transcribeAudio({ base64, mimeType });
+  const text = await ai.transcribeAudio({ base64, mimeType, prompt: sttVocab.whisperPrompt(sttTerms()) });
   return { text, speaker };
 });
 
@@ -1030,13 +1053,17 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
     });
     noteSuggestion(plan, id, question, result, params.knowledgeSnippets);
     let storyNote = '';
+    let toldStory = null;
     if (storyPlan && result && typeof result === 'object' && typeof result.text === 'string') {
       const told = storyStore.noteAnswer(storyPlan, question, result.text);
       storyNote = `${storyPlan.diagnostic}${told ? ` (told ${told.id})` : ''}`;
+      // Shown under the answer, so the user can see it's a real story of theirs.
+      if (told) toldStory = { title: told.title, source: told.source };
     }
     // Diagnostics only (renderer: "Thread" row); the answer is unchanged.
     const threadNote = [plan.label, state ? state.diagnostic : '', briefNote, storyNote].filter(Boolean).join(' · ');
-    return result && typeof result === 'object' && threadNote ? { ...result, thread: threadNote } : result;
+    if (!result || typeof result !== 'object') return result;
+    return { ...result, ...(threadNote ? { thread: threadNote } : {}), ...(toldStory ? { story: toldStory } : {}) };
   } finally {
     req.done();
   }

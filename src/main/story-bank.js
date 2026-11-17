@@ -172,11 +172,21 @@ function storyLines(s, used) {
   return lines.join('\n');
 }
 
+// Themes a story must really have to be told for that question: turning a
+// project into a "disagreement" or "failure" story is how invented stories
+// happen. (impact / technical_depth fit most stories; no warning for those.)
+const STRICT_THEMES = ['conflict', 'failure', 'leadership', 'pressure', 'ambiguity', 'customer'];
+const THEME_WORDS = { conflict: 'a disagreement or conflict', failure: 'a failure or mistake', leadership: 'leading people', pressure: 'a tight deadline or pressure', ambiguity: 'an unclear situation', customer: 'a customer or stakeholder' };
+
 // The STORY BANK block for the full answer ('' when there's nothing).
-function buildStoryBlock(picked, { used = new Map() } = {}) {
+// question: lets it warn when no story has the theme the question asks for.
+function buildStoryBlock(picked, { used = new Map(), question = '' } = {}) {
   if (!Array.isArray(picked) || !picked.length) return '';
   const head = "STORY BANK (the user's own stories, checked against their files; the quotes are word for word):";
+  const wanted = themesForQuestion(question).filter((t) => STRICT_THEMES.includes(t));
+  const missing = wanted.length && !picked.some((s) => s.themes.some((t) => wanted.includes(t)));
   const rules = [
+    ...(missing ? [`None of these stories is about ${wanted.map((t) => THEME_WORDS[t]).join(' or ')}. Don't turn one into that kind of story: no invented disagreement, failure, setback or team. Give the answer shape with [placeholders] the user fills in from a real experience, or name the closest real story without changing what happened.`] : []),
     'Tell ONE of these, the one that fits the question best (usually the first), in the user\'s voice. Use only its facts; anything missing stays general or a [placeholder].',
     'Prefer a story that hasn\'t been told yet this session, unless the interviewer is asking about that same story again.',
     "If none of them really fits, don't stretch one: give the answer shape with [placeholders] instead.",

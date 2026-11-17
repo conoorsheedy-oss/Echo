@@ -2,6 +2,12 @@
 
 ## 0.2.0 – unreleased
 
+- **Fixes from a mock-interview review.**
+  - **Your terms are heard right.** Names and specs from your knowledge files and brief (e.g. `NIST SP 800-22`, `PayDai`, `FastAPI`) go to Deepgram Nova-3 as keyterms and to Groq Whisper as a short prompt, so they're transcribed correctly. Only the terms are sent, never sentences. A Whisper transcript of the prompt itself (over silence) is dropped. Answers are also told to use the right term when the transcript garbles one ("SP 822" -> "SP 800-22").
+  - **Easier to say, not read.** Script lines are under ~15 words, one idea each. Technical walk-throughs are 3-4 steps that each start with a **bold cue** and make sense alone (no "first... then three"). Trade-offs are one contrast you can say in one breath. Formulas are said in words once and checked, with every increment / decrement.
+  - **"Any questions for me?"** always gets two real questions to ask (tailored to the brief), never "no questions"; the first line gives the first one.
+  - **No bent stories.** If none of the picked stories has the theme the question asks for (a disagreement, a failure, leading people...), Echo is told not to turn one into that kind of story and to use [placeholders] instead. The answer card shows which real story an answer told: `Your story: Ledgerly (cv.md)`.
+
 - **Ask panel answers like the answer card.** Typing an interview question into Ask ("tell me about something you're proud of") now gets a spoken answer: no "Here's an answer you can give" intro, no quotes around it, no closing moral, about 45 seconds at most, facts only from your files (the Ask panel now has the same TRUTH FIRST rule), and in Interview mode the story bank. Every prompt's TRUTH FIRST rule now also forbids adding a setback, team size, duration, number or "what it led to" to make a story sound real.
 
 - **CV story bank.** Echo reads your knowledge files once (and again only when they change) and pulls out your real stories. Every quote is checked word for word against the files and any number that isn't in them is dropped, so invented details don't get in. In Interview mode a new behavioural question gets the 2 best-fitting stories (theme, the question's words, the role from the brief), preferring ones you haven't told yet this session; the first line opens with the top one. On by default; switch it off in the Knowledge drawer (then your files are never sent whole). The drawer lists the stories found.

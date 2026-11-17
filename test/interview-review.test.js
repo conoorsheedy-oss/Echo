@@ -1,0 +1,121 @@
+// Fixes from a mock-interview review: the user's terms reach speech-to-text
+// (Deepgram keyterms, Whisper prompt), garbled terms aren't repeated, lines
+// short enough to say after one glance, cue-led technical steps, one-breath
+// trade-offs, checked formulas, "any questions for me?" always gets questions,
+// and no story is bent into a theme it doesn't have. Run: npm test
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const electronStub = require('./helpers/electron-stub');
+electronStub.app.getPath = () => fs.mkdtempSync(path.join(os.tmpdir(), 'echo-review-test-'));
+delete process.env.GEMINI_MODEL;
+delete process.env.GEMINI_HEADLINE_MODEL;
+const keyStore = require('../src/main/keyStore');
+keyStore.getKey = (provider) => (provider === 'gemini' || provider === 'groq' ? 'test-key' : '');
+const ai = require('../src/main/ai');
+const vocab = require('../src/main/stt-vocab');
+const dg = require('../src/main/deepgram-core');
+const SB = require('../src/main/story-bank');
+const { runSuggestion } = require('../src/main/suggest-pipeline');
+
+ai._resetHeadlineModel({ status: 'done', model: null });
+const realFetch = global.fetch;
+test.afterEach(() => { global.fetch = realFetch; ai._resetSessionState(); });
+
+const CV = `# Example
+## Experience
+Student Researcher, Hamilton Institute (Jun 2026 - Aug 2026)
+- Led a NIST SP 800-22 randomness testing framework in Python with a Flask web UI.
+- Validated MyRNG at 1,000,000 bits.
+Backend Intern, PayDai
+- Built Django REST endpoints for Calendly and GoHighLevel; Stripe OAuth and webhooks.
+Skills: Java, Python, TypeScript, C++, FastAPI, PostgreSQL, Docker`;
+
+test('vocabulary: names and specs from the files and the brief, not ordinary words', () => {
+  const terms = vocab.extractVocabulary({ documents: [{ source: 'cv.md', text: CV }], brief: { companyRole: 'Stripe, SWE intern', notes: 'They use Kafka.' } });
+  for (const t of ['NIST SP 800-22', 'MyRNG', 'GoHighLevel', 'PayDai', 'FastAPI', 'PostgreSQL', 'C++', 'Stripe', 'Calendly', 'Django', 'Hamilton', 'Kafka']) {
+    assert.ok(terms.includes(t), `${t} in ${terms.join(', ')}`);
+  }
+  for (const t of ['NIST', 'Built', 'Led', 'Experience', 'AI', 'UI', 'Validated']) assert.ok(!terms.includes(t), `${t} left out`);
+  assert.ok(terms.length <= vocab.MAX_TERMS);
+  assert.ok(terms.join('').length <= vocab.MAX_TOTAL_CHARS);
+  assert.deepEqual(vocab.extractVocabulary({}), []);
+  const prompt = vocab.whisperPrompt(terms);
+  assert.match(prompt, /^Job interview\. Terms: .*NIST SP 800-22/);
+  assert.ok(prompt.length <= vocab.WHISPER_PROMPT_MAX_CHARS);
+  assert.equal(vocab.whisperPrompt([]), '');
+});
+
+test('Deepgram: one keyterm per term, Nova-3 English only, capped', () => {
+  const url = new URL(dg.buildListenUrl({ keyterms: ['NIST SP 800-22', 'PayDai', 'PayDai', '', 'x'.repeat(80)] }));
+  assert.deepEqual(url.searchParams.getAll('keyterm'), ['NIST SP 800-22', 'PayDai']);
+  assert.deepEqual(new URL(dg.buildListenUrl({ model: 'nova-2', keyterms: ['PayDai'] })).searchParams.getAll('keyterm'), []);
+  assert.deepEqual(new URL(dg.buildListenUrl({ language: 'fr', keyterms: ['PayDai'] })).searchParams.getAll('keyterm'), []);
+  assert.equal(new URL(dg.buildListenUrl({ keyterms: Array.from({ length: 80 }, (_, i) => `Term${i}`) })).searchParams.getAll('keyterm').length, 40);
+  assert.equal(new URL(dg.buildListenUrl()).searchParams.getAll('keyterm').length, 0);
+});
+
+test('Groq Whisper: the prompt is sent; a transcript of the prompt itself is dropped', async () => {
+  const sent = [];
+  let reply = 'We used NIST SP 800-22.';
+  global.fetch = async (url, init) => {
+    sent.push(init.body);
+    return new Response(JSON.stringify({ text: reply, segments: [{ no_speech_prob: 0.01, avg_logprob: -0.1 }] }), { status: 200 });
+  };
+  const base64 = Buffer.alloc(4000, 1).toString('base64');
+  assert.equal(await ai.transcribeAudio({ base64, mimeType: 'audio/webm', prompt: 'Job interview. Terms: NIST SP 800-22.' }), 'We used NIST SP 800-22.');
+  assert.equal(sent[0].get('prompt'), 'Job interview. Terms: NIST SP 800-22.');
+  await ai.transcribeAudio({ base64, mimeType: 'audio/webm' });
+  assert.equal(sent[1].get('prompt'), null, 'no terms, no prompt');
+  reply = 'Job interview. Terms: NIST SP 800-22.';
+  assert.equal(await ai.transcribeAudio({ base64, mimeType: 'audio/webm', prompt: 'Job interview. Terms: NIST SP 800-22.' }), '');
+});
+
+test('prompt: garbled terms corrected, lines sayable, cue-led steps, one-breath trade-offs, checked formulas', () => {
+  for (const style of ['script', 'cues']) {
+    const system = ai.buildSystemPrompt('interview', style);
+    assert.match(system, /"SP 822" for "SP 800-22", use the correct one and never repeat the garbled version/);
+    assert.match(system, /\*\*bold cue of 1-3 words\*\*/);
+    assert.match(system, /Never write "first", "second", "then three"/);
+    assert.match(system, /one plain contrast the user can say in one breath/);
+    assert.match(system, /double-check it and every increment \/ decrement/);
+  }
+  assert.match(ai.buildSystemPrompt('interview', 'script'), /each under about 15 words so it can be said after one glance\. One idea per line\./);
+});
+
+test('"any questions for me?": both answers are told to give the user questions to ask', async () => {
+  for (const q of ['Do you have any questions for me?', 'Any questions for us?', 'Is there anything you would like to ask me?', 'What questions do you have for us?']) assert.ok(ai.invitesQuestions(q), q);
+  for (const q of ['Do you have any questions so far about the problem?', 'Anything you would like to ask about the input format?', 'Tell me about a time you asked questions.']) assert.ok(!ai.invitesQuestions(q), q);
+  const calls = [];
+  global.fetch = async (url, init) => {
+    calls.push(JSON.parse(init.body));
+    return new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'What does the first month look like?' }] }, finishReason: 'STOP' }] })}\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  };
+  await runSuggestion({ ai, params: { transcript: 'Them: Do you have any questions for me?', question: 'Do you have any questions for me?', mode: 'interview' }, emit: () => {}, headline: true, log: { warn() {} } });
+  await new Promise((r) => setTimeout(r, 10));
+  const textOf = (b) => b.contents[0].parts.map((p) => p.text || '').join('\n');
+  const head = calls.find((b) => b.generationConfig.thinkingConfig.thinkingLevel === 'minimal');
+  const full = calls.find((b) => b !== head);
+  assert.match(textOf(full), /Give 2 short, genuine questions the user could ask/);
+  assert.match(textOf(head), /give the first good question the user could ask them/);
+});
+
+test('story bank: no story with the asked-for theme -> told not to bend one into it', () => {
+  const docs = [{ source: 'cv.md', text: 'Built Ledgerly, a payments reconciliation service in Django. Rewrote the allocator after a memory leak.' }];
+  const { stories } = SB.verifyStories({ stories: [
+    { title: 'Ledgerly', source: 'cv.md', action: 'I built Ledgerly.', quotes: ['Built Ledgerly, a payments reconciliation service'], themes: ['impact'] },
+    { title: 'Allocator', source: 'cv.md', action: 'I rewrote the allocator.', quotes: ['Rewrote the allocator after a memory leak'], themes: ['failure', 'learning'] },
+  ] }, docs);
+  const q = 'Tell me about a time you disagreed with your supervisor.';
+  const block = SB.buildStoryBlock(SB.pickStories(stories, { question: q }), { question: q });
+  assert.match(block, /None of these stories is about a disagreement or conflict\. Don't turn one into that kind of story/);
+  const ok = 'Tell me about a mistake you made.';
+  assert.ok(!/None of these stories/.test(SB.buildStoryBlock(SB.pickStories(stories, { question: ok }), { question: ok })), 'the failure story fits');
+  const generic = 'Tell me about a project you are proud of.';
+  assert.ok(!/None of these stories/.test(SB.buildStoryBlock(SB.pickStories(stories, { question: generic }), { question: generic })));
+});

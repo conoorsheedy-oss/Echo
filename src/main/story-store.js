@@ -121,7 +121,7 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
     if (!picked.length) return null;
     return {
       picked,
-      block: SB.buildStoryBlock(picked, { used }),
+      block: SB.buildStoryBlock(picked, { used, question }),
       headlineLine: SB.buildHeadlineStoryLine(picked),
       diagnostic: `stories ${picked.map((s) => s.id).join(', ')}`,
     };
