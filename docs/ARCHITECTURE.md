@@ -60,6 +60,7 @@ All `invoke` channels are handled in `main.js` with `handle()`, which validates 
 | Screen | `screen:list-sources`, `screen:capture` | |
 | Knowledge | `knowledge:status`, `knowledge:reload`, `knowledge:open-folder`, `knowledge:add-files` | |
 | Brief | `brief:get`, `brief:set`, `brief:clear` | |
+| Stories | `stories:status`, `stories:set-enabled`, `stories:rebuild` | |
 | Window | `window:set-compact`, `window:hide` (send), `window:minimize` (send) | `window:compact-changed`, `window:visibility-changed` |
 | Privacy | `privacy:status`, `content-protection:status`, `content-protection:toggle` | `hotkey:privacy-mode-changed`, `hotkey:content-protection-changed` |
 | Gestures | `gestures:set-enabled`, `gestures:status`, `gestures:load-model` | |
@@ -246,6 +247,16 @@ The Brief drawer (dock) holds an optional brief: company and role, job ad, inter
 - **Best-fit CV snippet:** for behavioural questions (`behavioural_question` + `general`, not a thread follow-up), one extra knowledge snippet matched on the role/ad keywords is added (max 5 snippets), so "tell me about yourself" picks the project that fits the job.
 - **Diagnostics:** the Thread row adds `Brief: role ✓ ad ✓ (summary 540 chars) notes ✓ · type Coding · fit cv.md`.
 
+## CV story bank
+
+`story-store.js` builds it in the background (app start, Reload, Add files) when the knowledge files' hash differs from the cached one (`userData/story-bank.json`): one `ai.extractStories` call on `GEMINI_MODEL` (low thinking, JSON schema) over the files (≤30k chars, each under `=== FILE: name ===`). `story-bank.js` (pure) then checks everything before it's kept:
+
+- each quote must appear word for word in the files (case, whitespace, curly quotes, dashes and bullets ignored); a story with no checked quote is dropped;
+- every number in a story must appear in the files: an unchecked number in the result removes the result; in the title / situation / action it drops the story;
+- themes are limited to a fixed list; at most 10 stories.
+
+Use (Interview mode, a NEW behavioural question: `behavioural_question` + `general`, a named question, no instruction, not a thread follow-up): `pickStories()` ranks by theme words in the question (+3 per match), the question's own words (≤3), the brief's role keywords (≤2) and +1 if not yet told this session / −2.5 if told. The top 2 go in a `STORY BANK` block after the knowledge snippets (≤1600 chars; it replaces the "no background" note when no snippet matched); the first line gets one line with the top story. After the answer, `storyToldIn()` finds which story it told (≥3 shared title/quote words) and marks it used for the session (cleared on `session:reset`). Switched off: nothing is sent, nothing is used. Diagnostics > Thread: `stories S2, S3 (told S2)`.
+
 ## Answer voice and style
 
 Prompts live in `ai.js`. The suggest system prompt is `MODE_INTROS[mode]` + one shared core (`GROUNDING`, `HUMAN_VOICE` with the banned tells and three tone examples, `SCRIPT_STYLE` / `CUES_STYLE`, then the context / screen / knowledge notes) with one `MODE_NOTES[mode]` block after the answer style:
@@ -287,6 +298,7 @@ Prompts live in `ai.js`. The suggest system prompt is `MODE_INTROS[mode]` + one 
 - `test/interview-state.test.js`: the Phase 2b state block and Direction line on scripted interviews (labels, confirmed vs suggested details, the candidate contradicting Echo, behavioural follow-ups with and without a CV, ambiguous and older-thread links, the size caps / priority / determinism on a 20-thread session, code elision), the full answer and first line getting the same state (fetch-mocked request bodies), prompt caching, and byte-identical request bodies outside Interview mode (`test/fixtures/prompt-snapshots-2a.json`, inputs in `test/fixtures/prompt-cases.js`).
 - `test/interview-session.test.js`: scripted interviews for the session state: technical thread + follow-ups, "let's move on" into a behavioural thread, older-thread references, an ambiguous follow-up kept provisional and re-resolved by the candidate's answer, per-detail confirmation (aliases, negation, same thread, timing), claims / facts / constraints with their sources, resets, a schema check of every item, an early-start answer recorded before its question's line (no duplicate thread; it joins the real one), and the knowledge query with a fixture CV (the follow-up finds the same story; a plain question's snippets and prompt are byte-identical to before).
 - `test/interview-brief.test.js`: the brief: optional fields and caps, each field alone, HR-screen rule, raw ad vs summary (a stale summary ignored), keywords, the best-fit snippet, the thinking-level rule, empty brief = byte-identical interview requests, other modes byte-identical to the snapshots, the block at the top of both requests with unchanged system prompts, `summarizeJobAd` (fetch-mocked), and the store (save / reload / clear, background summary, failure fallback, stale result dropped).
+- `test/story-bank.test.js`: the checks (verbatim quotes, numbers from the files, curly quotes / dashes, paraphrases dropped), the extraction input, picking (theme, told stories pushed back, role tie-break), the block and first-line line, which story an answer told, the store (once per version of the files, restart, change, off / on, failure, stale result dropped, session use and reset), `extractStories` (fetch-mocked) and the prompts (after the background, replaces "no background", first line, other modes and no stories unchanged).
 - `test/question-core.test.js`: question detection by wording, "trailing off" detection and the auto-suggest delays (0 / 150 / 300 / 1500 ms).
 - `test/intent-core.test.js`: intent labels for realistic lines of every intent, `needsResponse` per mode (disagreement + recency), interview triggering identical to `looksLikeQuestion()`, never on `You` lines, the mode allowlist and the sentinel helpers.
 - `test/early-start-core.test.js`: early start on interim text (fires after 350 ms of a stable complete question; not for incomplete / trailing / short / low-confidence text, `You`, Privacy Mode, Groq or explicit requests; mode-specific), `reconcileFinal()` keep vs restart (punctuation, fillers, a soft tail word, an appended clause, a misheard word), the 1.5 s CALM swap window and the trigger labels.

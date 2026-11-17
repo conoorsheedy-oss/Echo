@@ -26,6 +26,7 @@ const STOPWORDS = new Set([
 ]);
 
 let chunks = []; // { source, index, text, tokens }
+let documents = []; // { source, text } -- whole files, for the story bank (story-store.js)
 let loadedAt = null;
 let failedFiles = []; // { file, reason } — surfaced in getStatus() so the UI (not just the console) can show them
 
@@ -48,8 +49,10 @@ the text you want into a .md file as a workaround).
 After adding or editing files here, click "Reload" in the app (or restart it)
 to pick up the changes.
 
-This folder lives in Echo's private app-data folder on this computer. Only
-the few snippets that match a question are sent to Gemini (under your key).
+This folder lives in Echo's private app-data folder on this computer. The
+snippets that match a question are sent to Gemini (under your key). With the
+story bank on (Knowledge drawer), the files are also sent once each time they
+change, to pull out your real stories.
 `;
   fs.writeFileSync(path.join(KNOWLEDGE_DIR, 'README.txt'), readme, 'utf-8');
 }
@@ -83,6 +86,7 @@ function tokenize(str) {
 function loadKnowledgeBase() {
   ensureKnowledgeDir();
   chunks = [];
+  documents = [];
   failedFiles = [];
 
   const files = fs
@@ -106,6 +110,7 @@ function loadKnowledgeBase() {
         chunks.push({ source: file, index: i, text: c, tokens: tokenize(c) });
         addedAny = true;
       });
+      if (addedAny) documents.push({ source: file, text });
       if (!addedAny && text.trim()) {
         // Every chunk in this file was a duplicate of content already loaded.
         failedFiles.push({ file, reason: 'duplicate content (skipped)' });
@@ -168,4 +173,9 @@ function getStatus() {
   };
 }
 
-module.exports = { loadKnowledgeBase, searchKnowledge, getStatus, KNOWLEDGE_DIR };
+// The loaded files' full text (story-store.js builds the story bank from it).
+function getDocuments() {
+  return documents.map((d) => ({ ...d }));
+}
+
+module.exports = { loadKnowledgeBase, searchKnowledge, getStatus, getDocuments, KNOWLEDGE_DIR };

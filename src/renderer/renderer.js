@@ -477,6 +477,7 @@ init();
 refreshScreenSources();
 refreshKnowledgeStatus();
 refreshBrief();
+refreshStories();
 
 minimizeBtn.addEventListener('click', () => api.minimizeWindow());
 // × quits Echo completely (stopping any session first).
@@ -1169,6 +1170,7 @@ addKnowledgeFilesBtn.addEventListener('click', async () => {
   try {
     const result = await api.addKnowledgeFiles();
     if (result.status) renderKnowledgeStatus(result.status);
+    refreshStories();
   } catch (err) {
     knowledgeStatusEl.textContent = 'Could not add files: ' + err.message;
   } finally {
@@ -1185,8 +1187,67 @@ reloadKnowledgeBtn.addEventListener('click', async () => {
   try {
     const status = await api.reloadKnowledge();
     renderKnowledgeStatus(status);
+    refreshStories();
   } finally {
     reloadKnowledgeBtn.disabled = false;
+  }
+});
+
+// ---- CV story bank (Knowledge drawer; main.js / story-store.js) ----
+const storyToggle = document.getElementById('story-bank-toggle');
+const storyStatusEl = document.getElementById('story-bank-status');
+const storyListEl = document.getElementById('story-bank-list');
+let storyPollTimer = null;
+
+function storyStatusText(view) {
+  switch (view.status) {
+    case 'off': return 'Off. Your files are only searched for snippets, as before.';
+    case 'empty': return 'Add your CV or notes and Echo will pull out your real stories.';
+    case 'building': return 'Reading your files for stories…';
+    case 'none_found': return "No concrete stories found in your files yet. Add project or job details and reload.";
+    case 'failed': return `Couldn't build the story bank (${view.error || 'error'}). It retries when you reload the files.`;
+    default: return `${view.count} real ${view.count === 1 ? 'story' : 'stories'}, checked against your files. Used for behavioural questions in Interview mode.`;
+  }
+}
+
+function renderStories(view) {
+  if (!view) return;
+  storyToggle.checked = view.enabled;
+  storyStatusEl.textContent = storyStatusText(view);
+  storyListEl.replaceChildren(...(view.stories || []).map((s) => {
+    const li = document.createElement('li');
+    li.textContent = s.title;
+    if (s.source) {
+      const meta = document.createElement('span');
+      meta.className = 'story-meta';
+      meta.textContent = s.source;
+      li.appendChild(meta);
+    }
+    return li;
+  }));
+  storyListEl.classList.toggle('hidden', !(view.stories && view.stories.length));
+  clearTimeout(storyPollTimer);
+  if (view.status === 'building') {
+    storyPollTimer = setTimeout(refreshStories, 2000);
+  }
+}
+
+async function refreshStories() {
+  try {
+    renderStories(await api.getStoryStatus());
+  } catch (err) {
+    storyStatusEl.textContent = 'Could not load the story bank.';
+  }
+}
+
+storyToggle.addEventListener('change', async () => {
+  storyToggle.disabled = true;
+  try {
+    renderStories(await api.setStoriesEnabled(storyToggle.checked));
+  } catch (err) {
+    storyStatusEl.textContent = 'Could not change the story bank: ' + err.message;
+  } finally {
+    storyToggle.disabled = false;
   }
 });
 

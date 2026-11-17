@@ -2,6 +2,8 @@
 
 ## 0.2.0 – unreleased
 
+- **CV story bank.** Echo reads your knowledge files once (and again only when they change) and pulls out your real stories. Every quote is checked word for word against the files and any number that isn't in them is dropped, so invented details don't get in. In Interview mode a new behavioural question gets the 2 best-fitting stories (theme, the question's words, the role from the brief), preferring ones you haven't told yet this session; the first line opens with the top one. On by default; switch it off in the Knowledge drawer (then your files are never sent whole). The drawer lists the stories found.
+
 - **Interview brief.** A new dock drawer where you tell Echo what you have before an interview, all optional: company and role, the job ad, the interview type (Behavioural / Coding / System design / Recruiter-HR screen / Mixed / Auto) and notes. Interview mode only; an empty brief changes nothing.
   - The ad steers which of your real projects Echo talks about; "have you used X?" gets an honest answer when X isn't in your CV; company facts only come from what you wrote (otherwise a `[placeholder]`). Notes are your own facts (`[From brief]`).
   - A long job ad is condensed once on save (Flash-Lite, ad text only); until then Echo uses the start of it.

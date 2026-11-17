@@ -1425,6 +1425,30 @@ option {
 }
 .brief-field textarea::placeholder { color: var(--text-subtle); opacity: 1; }
 
+.story-bank {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-6) var(--sp-5);
+}
+.story-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: 140px;
+  overflow-y: auto;
+}
+.story-list li {
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.story-list .story-meta { color: var(--text-subtle); margin-left: var(--sp-2); }
+
 #knowledge-status {
   padding: var(--sp-6);
   font-size: var(--fs-sm);

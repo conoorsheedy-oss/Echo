@@ -41,6 +41,11 @@ contextBridge.exposeInMainWorld('assistant', {
   reloadKnowledge: () => ipcRenderer.invoke('knowledge:reload'),
   openKnowledgeFolder: () => ipcRenderer.invoke('knowledge:open-folder'),
   addKnowledgeFiles: () => ipcRenderer.invoke('knowledge:add-files'),
+  // CV story bank: { enabled, status, error, count, stories: [{ id, title, source, themes }] }.
+  // status: empty | off | building | ready | failed | none_found
+  getStoryStatus: () => ipcRenderer.invoke('stories:status'),
+  setStoriesEnabled: (enabled) => ipcRenderer.invoke('stories:set-enabled', { enabled: enabled === true }),
+  rebuildStories: () => ipcRenderer.invoke('stories:rebuild'),
 
   // Your own API keys (see src/main/keyStore.js). Write-only from here:
   // status returns booleans + source ('saved' | 'env' | null), never a key.

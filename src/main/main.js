@@ -33,6 +33,7 @@ const { runSuggestion } = require('./suggest-pipeline');
 const { createDeepgramManager } = require('./deepgram');
 const interviewSession = require('./interview-session');
 const { createBriefStore } = require('./brief-store');
+const { createStoryStore } = require('./story-store');
 const interviewBrief = require('./interview-brief');
 
 // Optional Deepgram live speech-to-text (Settings > Speech-to-text). The
@@ -126,6 +127,28 @@ const briefStore = createBriefStore({
   file: path.join(app.getPath('userData'), 'interview-brief.json'),
   summarize: (opts) => ai.summarizeJobAd(opts),
 });
+
+// CV story bank (story-bank.js / story-store.js): the user's real stories,
+// pulled once from their knowledge files and checked word for word against
+// them. A NEW behavioural question in Interview mode gets the best-fitting
+// ones; follow-ups stay on the story being told (thread state).
+const storyStore = createStoryStore({
+  file: path.join(app.getPath('userData'), 'story-bank.json'),
+  extract: (opts) => ai.extractStories(opts),
+  getDocuments: () => knowledge.getDocuments(),
+});
+
+function planStories({ params, plan, analysis, briefPlan }) {
+  if (params.mode !== 'interview' || !params.question || params.instruction || !analysis) return null;
+  if (analysis.intent !== 'behavioural_question' || analysis.questionKind !== 'general') return null;
+  if (plan && Array.isArray(plan.prefer) && plan.prefer.length) return null; // a follow-up in a thread
+  try {
+    return storyStore.plan({ question: params.question, keywords: briefPlan ? briefPlan.keywords : [] });
+  } catch (err) {
+    console.warn('[stories] Story pick skipped:', err && err.message);
+    return null;
+  }
+}
 
 // Behavioural questions: one extra CV snippet that fits the role
 // (interview-brief.js pickFitSnippet). Never throws.
@@ -661,6 +684,8 @@ app.whenReady().then(async () => {
   // A saved long job ad without a summary (no key last time, offline...):
   // try once more now. Never blocks; until then the start of the ad is used.
   briefStore.ensureSummary();
+  // The story bank, if the knowledge files changed since it was built.
+  storyStore.rebuild();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createOverlayWindow();
@@ -990,6 +1015,11 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
       if (fit.fit) params.knowledgeSnippets = fit.snippets;
       briefNote = fit.fit ? `${briefPlan.diagnostic} · fit ${fit.fit}` : briefPlan.diagnostic;
     }
+    // Interview mode, a NEW behavioural question: the best real stories.
+    let analysis = null;
+    try { analysis = safeMode === 'interview' ? ai.analyzeSuggestion(params) : null; } catch (err) { analysis = null; }
+    const storyPlan = planStories({ params, plan, analysis, briefPlan });
+    if (storyPlan) params.stories = { block: storyPlan.block, headlineLine: storyPlan.headlineLine };
     const result = await runSuggestion({
       ai,
       params,
@@ -999,8 +1029,13 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
       headline: headline === true,
     });
     noteSuggestion(plan, id, question, result, params.knowledgeSnippets);
+    let storyNote = '';
+    if (storyPlan && result && typeof result === 'object' && typeof result.text === 'string') {
+      const told = storyStore.noteAnswer(storyPlan, question, result.text);
+      storyNote = `${storyPlan.diagnostic}${told ? ` (told ${told.id})` : ''}`;
+    }
     // Diagnostics only (renderer: "Thread" row); the answer is unchanged.
-    const threadNote = [plan.label, state ? state.diagnostic : '', briefNote].filter(Boolean).join(' · ');
+    const threadNote = [plan.label, state ? state.diagnostic : '', briefNote, storyNote].filter(Boolean).join(' · ');
     return result && typeof result === 'object' && threadNote ? { ...result, thread: threadNote } : result;
   } finally {
     req.done();
@@ -1025,7 +1060,20 @@ handle('brief:clear', async () => briefView(briefStore.clear()));
 // Stop listening / Clear transcript: forget the interview session state.
 handle('session:reset', async () => {
   interviewSession.resetSession(liveInterview);
+  storyStore.resetSession();
   return { ok: true };
+});
+
+// ---- Story bank (Knowledge drawer) ----
+const storyView = ({ pending, ...view }) => view;
+handle('stories:status', async () => storyView(storyStore.get()));
+handle('stories:set-enabled', async (_evt, { enabled } = {}) => {
+  if (typeof enabled !== 'boolean') throw new Error('Invalid value.');
+  return storyView(storyStore.setEnabled(enabled));
+});
+handle('stories:rebuild', async () => {
+  storyStore.rebuild({ force: true });
+  return storyView(storyStore.get());
 });
 
 handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAnswers, quality, images } = {}) => {
@@ -1132,6 +1180,7 @@ handle('knowledge:status', async () => knowledgeStatus);
 
 handle('knowledge:reload', async () => {
   knowledgeStatus = knowledge.loadKnowledgeBase();
+  storyStore.rebuild(); // only if the files changed
   return knowledgeStatus;
 });
 
@@ -1174,6 +1223,7 @@ handle('knowledge:add-files', async () => {
   }
 
   knowledgeStatus = knowledge.loadKnowledgeBase();
+  storyStore.rebuild(); // only if the files changed
   return { added, canceled: false, status: knowledgeStatus };
 });
 

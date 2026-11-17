@@ -152,6 +152,14 @@
           <button type="button" class="icon-btn drawer-close" aria-label="Close" title="Close (Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
         </div>
         <div id="knowledge-status" class="placeholder">Loading…</div>
+        <div id="story-bank" class="story-bank">
+          <label class="switch-row" title="Echo reads your files once and pulls out your real stories (checked word for word against the files), so behavioural answers reuse the same true stories.">
+            <span>Story bank <span class="brief-hint">real stories from your files, for behavioural questions</span></span>
+            <input type="checkbox" class="switch" id="story-bank-toggle" checked />
+          </label>
+          <p id="story-bank-status" class="brief-status" aria-live="polite"></p>
+          <ul id="story-bank-list" class="story-list hidden" aria-label="Stories found in your files"></ul>
+        </div>
         <div class="drawer-actions">
           <button id="add-knowledge-files-btn" type="button" class="soft" title="Add .txt/.md files (CV, notes)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg><span class="btn-label">Add files</span></button>
           <button id="open-knowledge-folder-btn" type="button" title="Open your personal knowledge folder"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-folder"/></svg><span class="btn-label">Open folder</span></button>

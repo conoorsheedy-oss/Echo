@@ -14,6 +14,7 @@
 const keyStore = require('./keyStore');
 const deepgramCore = require('./deepgram-core');
 const interviewBrief = require('./interview-brief');
+const storyBank = require('./story-bank');
 const { humanizeAnswer, createStreamHumanizer } = require('./humanize');
 // Pure, shared with the renderer: intent detection, the technical-question
 // heuristics and the new-problem / follow-up classifier.
@@ -610,6 +611,7 @@ function latestHints({ mode, kind, intent, allowNoResponse }) {
 //   1. FULL CONVERSATION SO FAR                append-only -> the long, stable prefix
 //   2. ANSWERS ALREADY GIVEN                   append-only
 //   3. background snippets (knowledge files)   re-ranked per question
+//   3a. STORY BANK                             interview only: a NEW behavioural question's best real stories
 //   3b. INTERVIEW STATE block                  interview only (Phase 2b): thread state with source labels
 //   4. screenshots note + the screenshots      (separate image parts)
 //   5. "=== LATEST ===" last lines + the question + "Direction:" line (interview only) + instruction + format hint
@@ -624,12 +626,14 @@ function latestHints({ mode, kind, intent, allowNoResponse }) {
 // stateBlock / direction: interview mode only (interviewStateFor()); absent
 // means the prompt is exactly what it was before Phase 2b.
 // briefBlock: interview mode only (briefFor()); absent = no brief, no change.
-function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock }) {
+function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock, storyBlock }) {
   const capped = capTranscript(transcript);
   let context = briefBlock ? `${briefBlock}\n\n` : '';
   context += `FULL CONVERSATION SO FAR (chronological, oldest first; "You" = the user, "Them" = the other side):\n\n${capped || '(no transcript yet)'}`;
   context += buildPreviousAnswersBlock(previousAnswers);
-  context += buildKnowledgeBlock(knowledgeSnippets);
+  // Stories are background too: don't also say "no background was provided".
+  if (!storyBlock || (knowledgeSnippets && knowledgeSnippets.length)) context += buildKnowledgeBlock(knowledgeSnippets);
+  if (storyBlock) context += `\n\n${storyBlock}`;
   if (stateBlock) context += `\n\n${stateBlock}`;
   context += describeScreenshots(images);
   let latest = '=== LATEST ===';
@@ -1145,6 +1149,16 @@ function briefFor(mode, brief, { headline = false } = {}) {
   };
 }
 
+// The story bank picks for this question (main.js: story-store.js plan()).
+// Interview mode only; anything malformed -> nothing.
+function storiesFor(mode, stories) {
+  if (mode !== 'interview' || !stories || typeof stories !== 'object') return { block: '', line: '' };
+  return {
+    block: typeof stories.block === 'string' ? stories.block : '',
+    line: typeof stories.headlineLine === 'string' ? stories.headlineLine : '',
+  };
+}
+
 async function generateSuggestion(params) {
   const {
     transcript, instruction, question, previousAnswers, images, knowledgeSnippets, quality, answerStyle, signal, onChunk,
@@ -1161,6 +1175,7 @@ async function generateSuggestion(params) {
   const { block: stateBlock, direction } = interviewStateFor(mode, params.interviewState);
   const conversation = buildConversation({
     transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock,
+    storyBlock: storiesFor(mode, params.stories).block,
   });
   const result = await callGemini({
     systemPrompt: buildSystemPrompt(mode, answerStyle),
@@ -1229,7 +1244,7 @@ function buildHeadlineSystemPrompt(mode) {
 // last couple of answers (they hold the code a follow-up is about) and the
 // knowledge snippets -- enough to say the right first sentence, small enough
 // to be quick.
-function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock }) {
+function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock, storyLine }) {
   const recent = capTranscript(transcript, HEADLINE_TRANSCRIPT_CHARS);
   let context = briefBlock ? `${briefBlock}\n\n` : '';
   context += `RECENT CONVERSATION (oldest first; "You" = the user, "Them" = the other side):\n\n${recent || '(no transcript yet)'}`;
@@ -1238,7 +1253,8 @@ function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnipp
       .map((a) => ({ ...a, text: clip(a.text, HEADLINE_PREVIOUS_ANSWER_CHARS) }));
     context += buildPreviousAnswersBlock(lastFew);
   }
-  context += buildKnowledgeBlock(knowledgeSnippets);
+  if (!storyLine || (knowledgeSnippets && knowledgeSnippets.length)) context += buildKnowledgeBlock(knowledgeSnippets);
+  if (storyLine) context += `\n\n${storyLine}`;
   if (stateBlock) context += `\n\n${stateBlock}`;
   context += describeScreenshots(images);
   let latest = '=== LATEST ===';
@@ -1414,6 +1430,7 @@ async function generateHeadline(params) {
     systemPrompt: buildHeadlineSystemPrompt(mode),
     parts: buildUserParts(buildHeadlineConversation({
       transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock,
+      storyLine: storiesFor(mode, params.stories).line,
     }), images),
     generationConfig: { temperature: 0.3 },
     thinkingLevel: 'minimal',
@@ -1520,6 +1537,67 @@ async function summarizeJobAd({ text, signal } = {}) {
   return cleanJobAdSummary(result.text);
 }
 
+// ---- CV story bank: extraction ----
+// One call per version of the knowledge files (story-store.js), on
+// GEMINI_MODEL (quality matters more than speed here, and it runs in the
+// background). Structured JSON; story-bank.js then checks every quote and
+// number against the files before anything is kept.
+const STORY_EXTRACT_TIMEOUT_MS = 90_000;
+const STORY_EXTRACT_SYSTEM_PROMPT = `You build a story bank for a job candidate from their own files (CV, notes, project write-ups). A story is one concrete thing they did: a project, a job, a problem they solved, a team situation.
+Rules:
+- Use ONLY what the files say. Never add a detail, number, tool, result or feeling that isn't written there. If the files don't say the result, leave "result" empty.
+- "quotes": 1 to 3 exact phrases copied character for character from the files that back the story up (each at least a few words). They are checked word for word; anything paraphrased is thrown away.
+- "source": the file name the story comes from, exactly as in its "=== FILE: name ===" header.
+- "title": a short name the candidate would use out loud ("the payments reconciliation service"), plain words.
+- "situation", "action", "result": one or two short plain sentences each, in the first person, re-said in plain spoken words (not copied buzzwords), but with no fact that isn't in the files.
+- "themes": the behavioural topics this story could answer, only from: THEME_LIST.
+- "skills": the tools, languages and skills it shows, as named in the files.
+Return 4 to 10 stories, the strongest and most distinct first. Fewer if the files don't have that many real stories; none rather than invented ones.`;
+
+const STORY_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    stories: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          title: { type: 'STRING' },
+          source: { type: 'STRING' },
+          situation: { type: 'STRING' },
+          action: { type: 'STRING' },
+          result: { type: 'STRING' },
+          quotes: { type: 'ARRAY', items: { type: 'STRING' } },
+          themes: { type: 'ARRAY', items: { type: 'STRING' } },
+          skills: { type: 'ARRAY', items: { type: 'STRING' } },
+        },
+        required: ['title', 'source', 'action', 'quotes', 'themes'],
+      },
+    },
+  },
+  required: ['stories'],
+};
+
+async function extractStories({ text, signal } = {}) {
+  const input = String(text || '').trim();
+  if (!input) return { stories: [] };
+  const result = await callGemini({
+    systemPrompt: STORY_EXTRACT_SYSTEM_PROMPT.replace('THEME_LIST', storyBank.THEMES.join(', ')),
+    parts: [{ text: `THE CANDIDATE'S FILES:\n\n${input}` }],
+    generationConfig: { responseMimeType: 'application/json', responseSchema: STORY_SCHEMA },
+    thinkingLevel: 'low',
+    answerTokens: 4096,
+    signal,
+    timeoutMs: STORY_EXTRACT_TIMEOUT_MS,
+  });
+  if (result.finishReason === 'MAX_TOKENS') throw aiError('TOO_LONG', 'The story bank was cut off (output limit).');
+  try {
+    return JSON.parse(result.text);
+  } catch (err) {
+    throw aiError('PROVIDER_ERROR', 'Gemini sent back a story bank Echo could not read.');
+  }
+}
+
 async function summarizeSession({ transcript }) {
   // Deliberately NOT trimmed -- a summary needs the whole session.
   const userText = `Transcript (chronological, "You" then "Them" lines):\n\n${transcript || '(empty)'}`;
@@ -1612,6 +1690,8 @@ module.exports = {
   askFollowUp,
   summarizeSession,
   summarizeJobAd,
+  extractStories,
+  storiesFor,
   briefFor,
   testKeys,
   testOne,
