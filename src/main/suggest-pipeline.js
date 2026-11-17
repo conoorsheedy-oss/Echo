@@ -11,6 +11,9 @@
 //   - The question is analysed ONCE (ai.analyzeSuggestion: question kind,
 //     intent, may-decline flag) and the same analysis goes to both calls, so
 //     the first line and the full answer read the question the same way.
+//     Likewise params.interviewState (Interview mode: the INTERVIEW STATE
+//     block + "Direction:" line, built once in main.js) reaches both calls
+//     unchanged; ai.js picks the full or the trimmed first-line block.
 //   - Both calls share the request's AbortSignal: a superseding request
 //     (ai-requests.js) cancels both HTTP requests at once.
 //   - The headline is only useful BEFORE the full answer has anything to

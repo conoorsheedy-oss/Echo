@@ -1470,6 +1470,458 @@ function describeLink(s, ctx) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2b: the INTERVIEW STATE block and the shared answer direction.
+//
+// Both are pure, deterministic text built from the session (no API calls).
+// main.js builds them ONCE per Interview-mode request (buildInterviewState)
+// and passes the same strings to the full answer and the instant first line
+// (ai.js puts the block after the background, before LATEST, and the
+// direction line inside LATEST; the system prompt is untouched per request).
+//
+// Every line carries a source label. Only [You said] (the candidate's own
+// transcript lines and details they actually said) and [From CV: file] are
+// facts about the user; [Interviewer] is what the other side said, and
+// [Echo suggested — not confirmed] is Echo's own earlier output, never the
+// user's.
+//
+// Trimming: the block is made of units (one line each; Echo's code is one
+// multi-line unit). Units are picked greedily in priority order
+//   header > link uncertainty > current question + follow-ups >
+//   [You said] lines / confirmed details / CV files > pinned constraints /
+//   problem / interviewer facts > Echo suggestion / code > other threads
+// (within a tier: the most recent first); a unit that doesn't fit is dropped
+// whole (never cut mid-label) and smaller ones after it may still fit. The
+// chosen units are then printed in reading order. The first line's smaller
+// block is picked the same way from the full block's units, so it is always
+// a subset of the full block, in the same order.
+
+const STATE_BLOCK_MAX_CHARS = 1500;
+const HEADLINE_STATE_BLOCK_MAX_CHARS = 900;
+const STATE_HEADER = 'INTERVIEW STATE (labels show where each item came from; only [You said] and [From CV] are facts about the user)';
+const L_INTERVIEWER = '[Interviewer]';
+const L_YOU = '[You said]';
+const L_ECHO = '[Echo suggested — not confirmed]';
+const L_INFERRED = '[Inferred from the wording]';
+const STATE_QUESTION_CHARS = 300;
+const STATE_FOLLOWUPS = 4;
+const STATE_FOLLOWUP_CHARS = 200;
+const STATE_YOU_LINES = 4;
+const STATE_YOU_LINE_CHARS = 280;
+const STATE_YOU_TOTAL_CHARS = 700;
+const STATE_PINNED_CHARS = 200;
+const STATE_ECHO_POINTS = 8;
+const STATE_ECHO_LINE_CHARS = 160;
+const STATE_CODE_CHARS = 1200;
+const STATE_CODE_MIN_CHARS = 160;
+const STATE_CODE_LINE_CHARS = 160;
+const STATE_OTHER_THREADS = 5;
+const STATE_TITLE_CHARS = 80;
+const SHORT_TITLE_CHARS = 48;
+// A link counts as uncertain below the threshold, or below this when there
+// is an alternative reading.
+const CLOSE_ALTERNATIVE_CONFIDENCE = 0.7;
+const APPROACH_KINDS = new Set(['data_structure', 'technique', 'complexity']);
+
+const TIER = { header: 0, link: 1, question: 2, you: 3, pinned: 4, echo: 5, other: 6 };
+
+function quote(text, max) {
+  return `"${clip(String(text || '').replace(/\s+/g, ' '), max)}"`;
+}
+
+function typeName(type) {
+  return String(type || 'other').replace(/_/g, ' ');
+}
+
+// Clip on a word boundary for short titles: "Given an array of integers, return…".
+function shortTitle(text, max = SHORT_TITLE_CHARS) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max - 1);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > max / 2 ? cut.slice(0, sp) : cut).replace(/[\s,;:.-]+$/, '')}…`;
+}
+
+// A thread's question without a leading transition sentence ("Okay, let's
+// move on. Tell me about..." -> "Tell me about..."), for titles.
+function titleText(s, thread) {
+  const text = threadTitleQuestion(s, thread);
+  const sentences = String(text || '').split(/(?<=[.!?])\s+/);
+  while (sentences.length > 1 && TRANSITION_RE.test(sentences[0])) sentences.shift();
+  return sentences.join(' ');
+}
+
+function threadLabel(s, thread) {
+  return `#${thread.number} (${shortTitle(titleText(s, thread))})`;
+}
+
+// The thread a request is about: its plan's thread, else (no question, e.g.
+// Shorten) the current one.
+function stateTarget(s, plan) {
+  const p = plan || {};
+  const link = p.link || null;
+  let thread = threadById(s, p.threadId);
+  if (thread && thread.status === 'merged') thread = threadById(s, thread.mergedInto);
+  if (!thread && !link) thread = threadById(s, s.currentThreadId);
+  return { thread, link, questionId: p.questionId || null };
+}
+
+function linkIsUncertain(link) {
+  if (!link) return false;
+  if (link.provisional || link.confidence < LINK_CONFIDENCE_THRESHOLD) return true;
+  return link.alternatives.length > 0 && link.confidence < CLOSE_ALTERNATIVE_CONFIDENCE;
+}
+
+// A follow-up of a thread that isn't the newest one.
+function refersBack(s, thread, link) {
+  if (!thread || !link || link.relation !== 'follow_up') return false;
+  return s.threads.some((t) => t.status !== 'merged' && t.number > thread.number);
+}
+
+// "a follow-up to #1 (Given an array…) or a new question" for every reading.
+function interpretationPhrases(s, thread, link) {
+  const out = [];
+  const add = (relation, threadId) => {
+    let phrase;
+    if (relation === 'new') {
+      const own = threadById(s, threadId);
+      phrase = own ? `a new question (#${own.number})` : 'a new question';
+    } else {
+      const t = threadById(s, threadId);
+      if (!t || t.status === 'merged') return;
+      phrase = `a follow-up to ${threadLabel(s, t)}`;
+    }
+    if (!out.includes(phrase)) out.push(phrase);
+  };
+  add(link.relation, thread ? thread.id : link.targetThreadId);
+  for (const a of link.alternatives) add(a.relation, a.targetThreadId);
+  return out.slice(0, 3);
+}
+
+function liveItems(s, ids) {
+  return (ids || []).map((id) => s.itemById.get(id)).filter((it) => it && it.status !== 'superseded');
+}
+
+// Candidate transcript lines of a thread, oldest first.
+function candidateLines(s, thread) {
+  return thread ? liveItems(s, thread.candidateLineIds).filter(isCandidateLine) : [];
+}
+
+// File names of the CV / notes snippets used for this thread (and this
+// request), in first-use order.
+function cvFiles(s, thread, knowledgeSnippets) {
+  const out = [];
+  for (const k of thread ? thread.knowledgeSources : []) if (k.source && !out.includes(k.source)) out.push(k.source);
+  for (const k of knowledgeSnippets || []) if (k && k.source && !out.includes(String(k.source))) out.push(String(k.source));
+  return out;
+}
+
+// Echo's code, shortened to `max` chars if needed: the fence + signature
+// line + as many first/last lines as fit, with an elision marker.
+function elideCode(code, max) {
+  const lines = String(code || '').split('\n').map((l) => (l.length > STATE_CODE_LINE_CHARS ? `${l.slice(0, STATE_CODE_LINE_CHARS - 1)}…` : l));
+  const whole = lines.join('\n');
+  if (whole.length <= max) return whole;
+  const open = /^```/.test(lines[0]) ? lines[0] : '```';
+  const close = '```';
+  const inner = lines.filter((l, i) => !(i === 0 && /^```/.test(l)) && !(i === lines.length - 1 && /^```\s*$/.test(l)));
+  if (!inner.length) return null;
+  const head = [inner[0]];
+  const tail = [];
+  let lo = 1;
+  let hi = inner.length - 1;
+  const render = () => {
+    const omitted = inner.length - head.length - tail.length;
+    const mid = omitted > 0 ? [`… (${omitted} line${omitted === 1 ? '' : 's'} omitted)`] : [];
+    return [open, ...head, ...mid, ...tail, close].join('\n');
+  };
+  if (render().length > max) return null;
+  let turn = 0;
+  while (lo <= hi) {
+    if (turn % 2 === 0) {
+      head.push(inner[lo]);
+      if (render().length > max) { head.pop(); break; }
+      lo += 1;
+    } else {
+      tail.unshift(inner[hi]);
+      if (render().length > max) { tail.shift(); break; }
+      hi -= 1;
+    }
+    turn += 1;
+  }
+  return render();
+}
+
+// The candidate's approach in their latest line that names one (data
+// structures, techniques, complexities), in the order they said them,
+// skipping negated ones ("instead of sorting"). -> ['two pointers', ...]
+function candidateApproach(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const text = lines[i].text;
+    const norm = normalizePhrase(text);
+    const found = [];
+    for (const d of extractDetails(text)) {
+      if (!APPROACH_KINDS.has(d.kind) || !matchDetail(d, text)) continue;
+      let at = Infinity;
+      if (d.kind === 'complexity') at = withComplexityMarkers(text).indexOf(d.marker) + 1e6; // after the named approach
+      else for (const a of d.aliases || []) { const k = norm.indexOf(` ${a} `); if (k !== -1 && k < at) at = k; }
+      found.push({ text: d.text, at });
+    }
+    if (found.length) return found.sort((a, b) => a.at - b.at).map((f) => f.text);
+  }
+  return [];
+}
+
+// Names the candidate said in this thread (project / company names).
+function candidateNames(lines, max = 2) {
+  const out = [];
+  for (const it of lines) {
+    for (const n of spokenNames(it.text)) {
+      if (VOCAB.some((v) => v.aliases.includes(n.toLowerCase()))) continue;
+      if (!out.includes(n)) out.push(n);
+    }
+  }
+  return out.slice(0, max);
+}
+
+// The CV file the candidate's story came from: the thread's / request's
+// snippet that shares the most words with what they said (else the first
+// one used for the thread).
+function storyFile(s, thread, lines, knowledgeSnippets) {
+  const snippets = [];
+  for (const k of thread ? threadKnowledgeSources(s, thread.id) : []) snippets.push(k);
+  for (const k of knowledgeSnippets || []) if (k && k.source) snippets.push({ source: String(k.source), text: String(k.text || '') });
+  if (!snippets.length) return null;
+  const said = new Set();
+  for (const it of lines) for (const t of tokensOf(it)) said.add(t);
+  let best = null;
+  let bestScore = 0;
+  for (const k of snippets) {
+    let score = 0;
+    for (const t of linkTokens(k.text)) if (said.has(t)) score += 1;
+    if (score > bestScore) { best = k; bestScore = score; }
+  }
+  if (best && bestScore >= 2) return best.source;
+  return thread && thread.knowledgeSources.length ? thread.knowledgeSources[0].source : (lines.length ? null : snippets[0].source);
+}
+
+// All units of the block (unselected). unit: { tier, rank, order, text }.
+function stateUnits(s, plan, { question, knowledgeSnippets } = {}) {
+  const { thread, link, questionId } = stateTarget(s, plan);
+  const units = [];
+  let order = 0;
+  const push = (tier, rank, text) => { if (text) units.push({ tier, rank, order: order++, text }); };
+  push(TIER.header, 0, STATE_HEADER);
+
+  // Link uncertainty / older-thread reference.
+  if (link && linkIsUncertain(link)) {
+    const phrases = interpretationPhrases(s, thread, link);
+    if (phrases.length > 1) push(TIER.link, 0, `Link ${L_INFERRED}: this question may be ${phrases.join(' or ')} — decide from the wording.`);
+  } else if (refersBack(s, thread, link)) {
+    push(TIER.link, 0, `Link ${L_INFERRED}: refers back to ${threadLabel(s, thread)}, an earlier thread, not the latest one.`);
+  }
+
+  // Current question / thread.
+  const askedNow = String(question || '').trim();
+  if (thread) {
+    const opener = threadTitleQuestion(s, thread);
+    const isNew = link && link.relation === 'new';
+    push(TIER.question, 0, `Current thread #${thread.number} (${typeName(thread.type)}${isNew ? ', new' : ''}). Original question: ${quote(opener, STATE_QUESTION_CHARS)} ${L_INTERVIEWER}`);
+    const follow = s.questions.filter((q) => thread.followUpIds.includes(q.id));
+    const now = askedNow && !follow.some((q) => q.id === questionId) && !(questionId && thread.questionIds.includes(questionId))
+      && normKey(askedNow) !== normKey(opener) ? askedNow : '';
+    const shown = follow.slice(-(now ? STATE_FOLLOWUPS - 1 : STATE_FOLLOWUPS));
+    const fl = shown.map((q) => `Follow-up${q.id === questionId ? ' (asked now)' : ''}: ${quote(q.text, STATE_FOLLOWUP_CHARS)} ${L_INTERVIEWER}`);
+    if (now) fl.push(`Follow-up (asked now): ${quote(now, STATE_FOLLOWUP_CHARS)} ${L_INTERVIEWER}`);
+    // Most recent first when trimming, printed oldest first.
+    fl.forEach((text, i) => push(TIER.question, 1 + (fl.length - 1 - i), text));
+  } else if (askedNow) {
+    push(TIER.question, 0, `Current question (a new thread): ${quote(askedNow, STATE_QUESTION_CHARS)} ${L_INTERVIEWER}`);
+  }
+
+  // What the candidate actually said in this thread.
+  const lines = candidateLines(s, thread);
+  const confirmed = [];
+  for (const it of liveItems(s, thread ? thread.pinned.confirmedDetails : [])) if (!confirmed.includes(it.text)) confirmed.push(it.text);
+  if (confirmed.length) push(TIER.you, 0, `Details the candidate said out loud: ${confirmed.map((c) => `[You said — confirmed: ${quote(c, 60)}]`).join(' ')}`);
+  const youLines = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0 && youLines.length < STATE_YOU_LINES; i--) {
+    const text = `${L_YOU} ${quote(lines[i].text, STATE_YOU_LINE_CHARS)}`;
+    if (used + text.length > STATE_YOU_TOTAL_CHARS) break;
+    used += text.length;
+    youLines.unshift(text);
+  }
+  youLines.forEach((text, i) => push(TIER.you, 1 + (youLines.length - 1 - i), text));
+  const files = cvFiles(s, thread, null);
+  if (files.length) push(TIER.you, 1 + STATE_YOU_LINES, `CV files used for this thread: ${files.slice(0, 4).map((f) => `[From CV: ${f}]`).join(' ')}`);
+
+  // Pinned interviewer facts.
+  if (thread) {
+    const seen = new Set([normKey(threadTitleQuestion(s, thread)), ...s.questions.filter((q) => q.threadId === thread.id).map((q) => q.norm)]);
+    const pinnedLines = (ids, name, max) => {
+      const out = [];
+      for (const it of liveItems(s, ids)) {
+        const k = normKey(it.text);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(`${name}: ${quote(it.text, STATE_PINNED_CHARS)} ${L_INTERVIEWER}`);
+      }
+      return out.slice(-max);
+    };
+    let rank = 0;
+    for (const text of pinnedLines(thread.pinned.constraints, 'Constraint', 3)) push(TIER.pinned, rank++, text);
+    for (const text of pinnedLines(thread.pinned.problemStatement, 'Problem detail', 2)) push(TIER.pinned, rank++, text);
+    for (const text of pinnedLines(thread.pinned.interviewerFacts, 'Interviewer fact', 2)) push(TIER.pinned, rank++, text);
+  }
+
+  // Echo's earlier suggestion for this thread (never the user's facts).
+  if (thread) {
+    const sugs = s.suggestions.filter((r) => r.threadId === thread.id);
+    const last = sugs[sugs.length - 1];
+    const lastItem = last && s.itemById.get(last.itemId);
+    if (lastItem && lastItem.status !== 'superseded') {
+      const first = (lastItem.text.replace(CODE_BLOCK_RE, ' ').split('\n').map((l) => l.trim()).find((l) => l) || '');
+      const points = [];
+      for (const r of sugs) {
+        for (const d of liveItems(s, r.detailIds)) {
+          if (d.detail.kind === 'code' || d.confirmedBy) continue;
+          if (confirmed.includes(d.text)) continue;
+          const i = points.indexOf(d.text);
+          if (i !== -1) points.splice(i, 1);
+          points.push(d.text);
+        }
+      }
+      let text = `Echo's earlier answer for #${thread.number} ${L_ECHO}:`;
+      if (first) text += ` ${quote(first, STATE_ECHO_LINE_CHARS)}`;
+      if (points.length) text += ` Points the candidate hasn't said: ${points.slice(-STATE_ECHO_POINTS).join(', ')}.`;
+      push(TIER.echo, 0, text);
+    }
+    const code = thread.code && familyOf(thread.type) === 'technical' ? s.itemById.get(thread.code) : null;
+    if (code && code.status !== 'superseded') {
+      units.push({ tier: TIER.echo, rank: 1, order: order++, text: null, code: code.text, prefix: `Echo's latest code for #${thread.number} ${L_ECHO}:` });
+    }
+  }
+
+  // Other threads, most recent first.
+  const others = liveThreads(s).filter((t) => !thread || t.id !== thread.id).reverse().slice(0, STATE_OTHER_THREADS);
+  others.forEach((t, i) => push(TIER.other, i, `Other thread #${t.number} (${typeName(t.type)}, ${t.status === 'answered' ? 'answered' : 'open'}): ${quote(titleText(s, t), STATE_TITLE_CHARS)} ${L_INTERVIEWER}`));
+  void knowledgeSnippets;
+  return units;
+}
+
+function unitText(u, budget) {
+  if (u.text) return u.text;
+  const room = Math.min(STATE_CODE_CHARS, budget - u.prefix.length - 1);
+  if (room < STATE_CODE_MIN_CHARS) return null;
+  const code = elideCode(u.code, room);
+  return code ? `${u.prefix}\n${code}` : null;
+}
+
+// Greedy pick in priority order; returns the chosen units (with text).
+function pickUnits(units, maxChars) {
+  const ranked = [...units].sort((a, b) => a.tier - b.tier || a.rank - b.rank || a.order - b.order);
+  const chosen = [];
+  let used = 0;
+  for (const u of ranked) {
+    const sep = chosen.length ? 1 : 0;
+    const text = unitText(u, maxChars - used - sep);
+    if (!text || used + sep + text.length > maxChars) continue;
+    used += sep + text.length;
+    chosen.push({ ...u, text });
+  }
+  return chosen.sort((a, b) => a.order - b.order);
+}
+
+// Nothing beyond the header and the question itself: no block (a plain
+// first question keeps exactly the old prompt).
+function worthSending(chosen) {
+  return chosen.some((u) => u.tier !== TIER.header && !(u.tier === TIER.question && u.rank === 0));
+}
+
+// The INTERVIEW STATE block for one request ('' when there's nothing to add).
+// plan: planKnowledgeSearch()'s result (or { threadId, questionId, link }).
+// opts: { maxChars = 1500, question }.
+function buildStateBlock(s, plan, { maxChars = STATE_BLOCK_MAX_CHARS, question } = {}) {
+  const chosen = pickUnits(stateUnits(s, plan, { question }), maxChars);
+  return worthSending(chosen) ? chosen.map((u) => u.text).join('\n') : '';
+}
+
+// One line for LATEST, shared by the full answer and the first line.
+// analysis: { intent, kind } (ai.analyzeSuggestion's intent / questionKind).
+function buildAnswerDirection(s, plan, analysis = {}, { question, knowledgeSnippets } = {}) {
+  const { intent, kind } = analysis || {};
+  const { thread, link } = stateTarget(s, plan);
+  const q = String(question || '').trim();
+  // No question (e.g. Shorten / Expand an answer): nothing to direct.
+  if (!link && !q) return '';
+  const relation = link ? link.relation : (thread ? 'follow_up' : 'new');
+  const uncertain = linkIsUncertain(link);
+  let uncertainNote = '';
+  if (uncertain) {
+    const alts = [];
+    for (const a of link.alternatives) {
+      const t = threadById(s, a.targetThreadId);
+      const phrase = a.relation === 'new' ? 'a new question' : (t && t.status !== 'merged' && (!thread || t.id !== thread.id) ? `#${t.number}` : '');
+      if (phrase && !alts.includes(phrase)) alts.push(phrase);
+    }
+    if (alts.length) uncertainNote = ` Uncertain link: it may instead be about ${alts.slice(0, 2).join(' or ')}; go with the wording.`;
+  }
+  if (relation === 'new' || !thread) {
+    const type = thread ? thread.type : inferQuestionType(q, { intent, kind }).type;
+    const family = thread ? familyOf(type) : (kind === 'problem' ? 'technical' : familyOf(type));
+    let line;
+    if (type === 'technical_problem' || type === 'system_design' || (family === 'technical' && kind === 'problem')) line = 'Direction: new problem — start with the approach, then the walk-through.';
+    else if (family === 'technical') line = 'Direction: new technical question — give the direct answer first.';
+    else if (family === 'people' || intent === 'behavioural_question') line = 'Direction: new behavioural question — pick one real story from the CV; use [placeholders] if none fits.';
+    else line = 'Direction: new question — answer it directly.';
+    return `${line}${uncertainNote}`;
+  }
+  const lines = candidateLines(s, thread);
+  const verb = refersBack(s, thread, link) && !uncertain ? 'refers back to' : 'follow-up on';
+  const head = `Direction: ${uncertain ? 'probably a ' : ''}${verb} ${threadLabel(s, thread)}`;
+  const family = familyOf(thread.type);
+  let body;
+  if (family === 'technical') {
+    const approach = candidateApproach(lines);
+    body = approach.length
+      ? `answer in terms of the approach the candidate described: ${approach.join(', ')} ${L_YOU}.`
+      : "answer the follow-up directly and stay consistent with what's already been said in this thread.";
+  } else if (family === 'people') {
+    const names = candidateNames(lines);
+    const file = storyFile(s, thread, lines, knowledgeSnippets);
+    const facts = [];
+    if (names.length) facts.push(`${names.join(', ')} ${L_YOU}`);
+    if (file) facts.push(`[From CV: ${file}]`);
+    if (file) body = `stay with the same story (${facts.join('; ')}).`;
+    else body = `stay with the same story${names.length ? ` (${facts[0]})` : ''}; no CV facts, so use [placeholders] for anything the candidate hasn't said.`;
+  } else {
+    body = 'build on what the candidate already said.';
+  }
+  return `${head} — ${body}${uncertainNote}`;
+}
+
+// Everything main.js needs for one Interview-mode request, computed once.
+// -> { block, headlineBlock, direction, threadNumber, linkConfidence, diagnostic }
+function buildInterviewState(s, plan, { question, analysis, knowledgeSnippets, maxChars = STATE_BLOCK_MAX_CHARS, headlineMaxChars = HEADLINE_STATE_BLOCK_MAX_CHARS } = {}) {
+  const units = stateUnits(s, plan, { question });
+  const full = pickUnits(units, maxChars);
+  const block = worthSending(full) ? full.map((u) => u.text).join('\n') : '';
+  // The first line's block: picked from the full block's own units.
+  const head = block ? pickUnits(full.map((u) => ({ ...u, code: null })), headlineMaxChars) : [];
+  const headlineBlock = worthSending(head) ? head.map((u) => u.text).join('\n') : '';
+  const direction = buildAnswerDirection(s, plan, analysis, { question, knowledgeSnippets });
+  const { thread, link } = stateTarget(s, plan);
+  const threadNumber = thread ? thread.number : null;
+  const linkConfidence = link ? link.confidence : null;
+  const where = [threadNumber ? `thread #${threadNumber}` : 'new thread'];
+  if (linkConfidence !== null) where.push(`link ${linkConfidence.toFixed(2)}`);
+  return {
+    block, headlineBlock, direction, threadNumber, linkConfidence,
+    diagnostic: `State block: ${block.length} chars (${where.join(', ')})`,
+  };
+}
+
 module.exports = {
   ITEM_TYPES,
   ITEM_STATUSES,
@@ -1485,6 +1937,12 @@ module.exports = {
   threadKnowledgeSources,
   planKnowledgeSearch,
   describeLink,
+  buildStateBlock,
+  buildAnswerDirection,
+  buildInterviewState,
+  STATE_BLOCK_MAX_CHARS,
+  HEADLINE_STATE_BLOCK_MAX_CHARS,
+  STATE_HEADER,
   extractSearchQuery,
   legacySearchQuery,
   // pure helpers (tests)

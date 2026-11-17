@@ -59,8 +59,9 @@ let knowledgeStatus = knowledge.loadKnowledgeBase();
 // Interview session state (interview-session.js): the question / thread log,
 // follow-up linking, pinned facts and confirmed details for the current
 // listening session. Memory only: never written to disk, cleared on Stop /
-// Clear transcript (session:reset) and gone on quit. Phase 2a only uses it
-// for the knowledge-base (CV) query; the answer prompts are unchanged.
+// Clear transcript (session:reset) and gone on quit. It drives the
+// knowledge-base (CV) query (Phase 2a) and, in Interview mode, the INTERVIEW
+// STATE block + "Direction:" line in the answer prompts (Phase 2b).
 const liveInterview = interviewSession.createSession();
 
 // The knowledge query for one ai:suggest request. Any failure in the session
@@ -74,6 +75,25 @@ function planKnowledge({ transcript, question, instruction, mode }) {
     // Don't keep half-ingested state: the next request rebuilds it from the transcript.
     try { interviewSession.resetSession(liveInterview); } catch (e) { /* nothing more to do */ }
     return { query: interviewSession.legacySearchQuery({ question, instruction, transcript }), prefer: [], label: '', generation: null };
+  }
+}
+
+// Interview mode only: the state block (full + first-line size) and the
+// shared Direction line, built ONCE per request so the full answer and the
+// instant first line get identical inputs. Any failure -> no block (the
+// answer goes out exactly as without Phase 2b), never an error.
+function planInterviewState(plan, params) {
+  if (params.mode !== 'interview' || !plan || plan.generation === null) return null;
+  try {
+    const analysis = ai.analyzeSuggestion(params);
+    return interviewSession.buildInterviewState(liveInterview, plan, {
+      question: params.question,
+      analysis: { intent: analysis.intent, kind: analysis.questionKind },
+      knowledgeSnippets: params.knowledgeSnippets,
+    });
+  } catch (err) {
+    console.warn('[session] Interview state skipped:', err && err.message);
+    return null;
   }
 }
 
@@ -915,21 +935,25 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
     const knowledgeSnippets = plan.prefer && plan.prefer.length
       ? knowledge.searchKnowledge(plan.query, undefined, { prefer: plan.prefer })
       : knowledge.searchKnowledge(plan.query);
+    const params = {
+      transcript,
+      mode: safeMode,
+      requestKind,
+      intent: validateIntent(intent),
+      instruction,
+      question,
+      previousAnswers: prior,
+      quality: q,
+      answerStyle: style,
+      images: preparedImages,
+      knowledgeSnippets,
+    };
+    // Interview mode: thread state + Direction line (other modes: none).
+    const state = planInterviewState(plan, params);
+    if (state) params.interviewState = state;
     const result = await runSuggestion({
       ai,
-      params: {
-        transcript,
-        mode: safeMode,
-        requestKind,
-        intent: validateIntent(intent),
-        instruction,
-        question,
-        previousAnswers: prior,
-        quality: q,
-        answerStyle: style,
-        images: preparedImages,
-        knowledgeSnippets,
-      },
+      params,
       // Lets a superseding request actually cancel both HTTP requests.
       signal: req.signal,
       emit: partForwarder(evt, id),
@@ -937,7 +961,8 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
     });
     noteSuggestion(plan, id, question, result, knowledgeSnippets);
     // Diagnostics only (renderer: "Thread" row); the answer is unchanged.
-    return result && typeof result === 'object' && plan.label ? { ...result, thread: plan.label } : result;
+    const threadNote = [plan.label, state ? state.diagnostic : ''].filter(Boolean).join(' · ');
+    return result && typeof result === 'object' && threadNote ? { ...result, thread: threadNote } : result;
   } finally {
     req.done();
   }

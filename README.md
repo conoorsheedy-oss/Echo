@@ -89,6 +89,10 @@ The window has three parts: a slim **top bar**, the **answer card** (most of the
 - **See-through** (Settings > Appearance > **Transparency**, or `Ctrl+Shift+T`): lets you see the call or your code editor behind Echo while you read. Only the background fades; the text stays solid. See [Settings](#settings).
 - **Click-through** (`Ctrl+Shift+X`): clicks go to the app underneath, and Echo dims so you can tell. With see-through on it dims less, because the background is already thin.
 
+### How Echo keeps track of the interview
+
+In Interview mode Echo keeps a running log of the interview in memory (never saved; cleared on Stop, Clear transcript and quit): which questions belong together, what the interviewer pinned down ("assume the input is sorted"), what **you** actually said, and what Echo only suggested. Each answer gets a short, labelled summary of that state: your own words are marked `[You said]`, facts from your CV `[From CV: file]`, the interviewer's `[Interviewer]`, and Echo's earlier suggestions `[Echo suggested — not confirmed]`, so a follow-up like "why that approach?" is answered in terms of what you said (if you went with two pointers instead of the suggested hash map, the answer follows you), and something you never said is never treated as yours. A behavioural follow-up ("what did you learn?") stays with the story you told. The instant first line and the full answer get the same summary and the same one-line direction, so they agree. When it's unclear which earlier question a follow-up is about, the prompt says so and lets the model decide from the wording. Other modes are unchanged.
+
 ## Keyboard shortcuts
 
 On macOS, `Ctrl` is `Cmd`. These work even when Echo isn't focused.

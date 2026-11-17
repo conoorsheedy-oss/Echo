@@ -364,10 +364,17 @@ const NO_RESPONSE_NOTE = `\n- Automatic suggestions: only when the LATEST sectio
 const STAR_SCRIPT = '- For behavioural "tell me about a time" questions use a compressed STAR shape: the situation in a clause, what I did, and end on the result.';
 const STAR_CUES = '- For behavioural "tell me about a time" questions follow STAR (situation, what I did, result) and make the last cue the concrete result.';
 
+// Interview only (Phase 2b): how to read the INTERVIEW STATE block and the
+// "Direction:" line that main.js adds to the user message. Fixed text, so
+// the system prompt is still identical for every request (prefix caching).
+const INTERVIEW_STATE_NOTE = `
+- An INTERVIEW STATE block may come after the background, with a source label on every line: [Interviewer] = what the interviewer said, verbatim. [You said] = the candidate's own words, verbatim, and [You said — confirmed: "x"] = a detail the candidate actually said out loud. [From CV: file] = from the user's own files. [Echo suggested — not confirmed] = what you suggested earlier; the candidate may not have used any of it. [Inferred from the wording] = a best guess at which earlier question this one is about. Only [You said] and [From CV] are facts about the user.
+- Answer follow-ups in terms of what the candidate actually said ([You said]); if that differs from [Echo suggested], follow the candidate's version and don't contradict them. Never treat [Echo suggested — not confirmed] as something the user did or said. When the state says a question may refer to two threads, pick the reading the wording supports best. LATEST may also have a "Direction:" line: follow it unless the wording of the question clearly says otherwise.`;
+
 const MODE_NOTES = {
   interview: (style) => `\nInterview rules:
 ${style === 'cues' ? STAR_CUES : STAR_SCRIPT}
-- Questions about the user's own experience: use their real facts from the transcript or background; if there are none, use short [placeholders] (see TRUTH FIRST).${TECHNICAL_STYLE}`,
+- Questions about the user's own experience: use their real facts from the transcript or background; if there are none, use short [placeholders] (see TRUTH FIRST).${INTERVIEW_STATE_NOTE}${TECHNICAL_STYLE}`,
   meeting: () => `\nMeeting rules. You're helping the user contribute to a group discussion, not answer an exam:
 - Say something worth saying: a clear position, a concrete suggestion, a useful next step, or a sharp question. Sometimes the best contribution is a good question, and then the first line is that question.
 - Asked for an opinion: take a clear position and give one reason. Honest hedging is fine ("I'd lean towards X, mainly because Y"); being vague is not.
@@ -590,8 +597,9 @@ function latestHints({ mode, kind, intent, allowNoResponse }) {
 //   1. FULL CONVERSATION SO FAR                append-only -> the long, stable prefix
 //   2. ANSWERS ALREADY GIVEN                   append-only
 //   3. background snippets (knowledge files)   re-ranked per question
+//   3b. INTERVIEW STATE block                  interview only (Phase 2b): thread state with source labels
 //   4. screenshots note + the screenshots      (separate image parts)
-//   5. "=== LATEST ===" last lines + the question/instruction + format hint
+//   5. "=== LATEST ===" last lines + the question + "Direction:" line (interview only) + instruction + format hint
 // The transcript is by far the biggest block and only ever grows at its end,
 // so consecutive requests share everything up to its old end. Blocks that
 // change on (almost) every question -- the knowledge snippets, which are
@@ -600,11 +608,14 @@ function latestHints({ mode, kind, intent, allowNoResponse }) {
 // Returns { context, latest } text; buildUserParts() puts images between them.
 // mode / intent / allowNoResponse: see latestHints() (no mode = the
 // interview hints, as before).
-function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse }) {
+// stateBlock / direction: interview mode only (interviewStateFor()); absent
+// means the prompt is exactly what it was before Phase 2b.
+function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction }) {
   const capped = capTranscript(transcript);
   let context = `FULL CONVERSATION SO FAR (chronological, oldest first; "You" = the user, "Them" = the other side):\n\n${capped || '(no transcript yet)'}`;
   context += buildPreviousAnswersBlock(previousAnswers);
   context += buildKnowledgeBlock(knowledgeSnippets);
+  if (stateBlock) context += `\n\n${stateBlock}`;
   context += describeScreenshots(images);
   let latest = '=== LATEST ===';
   const tail = capped ? latestLines(capped) : '';
@@ -612,6 +623,7 @@ function buildConversation({ transcript, previousAnswers, knowledgeSnippets, que
   if (userQuestion) latest += `\n\nUser's question to you: ${userQuestion}`;
   else if (question) latest += `\n\nQuestion to answer now (asked by Them): "${question}"`;
   else latest += '\n\nAnswer whatever was most recently asked or said above.';
+  if (direction) latest += `\n\n${direction}`;
   if (instruction) latest += `\n\nAdditional instruction from the user: ${instruction}`;
   for (const hint of latestHints({ mode, kind, intent, allowNoResponse })) latest += `\n\n${hint}`;
   return { context, latest };
@@ -1084,6 +1096,19 @@ function suggestionAnalysis(params) {
   };
 }
 
+// The interview state (main.js: interview-session.buildInterviewState(),
+// computed once per request) for the full answer (`block`) and the first
+// line (`headlineBlock`, a trimmed subset); `direction` is the same line for
+// both. Interview mode only: other modes never get any of it.
+function interviewStateFor(mode, state, { headline = false } = {}) {
+  if (mode !== 'interview' || !state || typeof state !== 'object') return { block: '', direction: '' };
+  const block = headline ? state.headlineBlock : state.block;
+  return {
+    block: typeof block === 'string' ? block : '',
+    direction: typeof state.direction === 'string' ? state.direction : '',
+  };
+}
+
 async function generateSuggestion(params) {
   const {
     transcript, instruction, question, previousAnswers, images, knowledgeSnippets, quality, answerStyle, signal, onChunk,
@@ -1093,8 +1118,9 @@ async function generateSuggestion(params) {
   const thinkingLevel = resolveThinkingLevel({ mode, quality, kind });
   const answerTokens = answerTokensFor(kind, instruction);
 
+  const { block: stateBlock, direction } = interviewStateFor(mode, params.interviewState);
   const conversation = buildConversation({
-    transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse,
+    transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction,
   });
   const result = await callGemini({
     systemPrompt: buildSystemPrompt(mode, answerStyle),
@@ -1139,7 +1165,7 @@ const HEADLINE_SITUATIONS = {
 
 // Mode-specific lines for the first sentence, matching MODE_NOTES.
 const HEADLINE_MODE_RULES = {
-  interview: '',
+  interview: `\n- If an INTERVIEW STATE block is given, only [You said] and [From CV] lines are facts about the user; never present [Echo suggested — not confirmed] as something they said or did. If the candidate's own version differs from Echo's, follow the candidate's. Follow the "Direction:" line in LATEST.`,
   meeting: `\n- In a meeting the first line can be a position, a concrete suggestion or a short question back. If someone pushed back on the user, acknowledge it and respond with a reason; never just agree, never get defensive. Don't open by praising or agreeing with their point.`,
   presentation: `\n- An audience question: answer it directly. If the user seems lost, a short bridge back to their main point.`,
   general: `\n- A natural reply: answer, suggest, or ask a short question back.`,
@@ -1163,7 +1189,7 @@ function buildHeadlineSystemPrompt(mode) {
 // last couple of answers (they hold the code a follow-up is about) and the
 // knowledge snippets -- enough to say the right first sentence, small enough
 // to be quick.
-function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse }) {
+function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction }) {
   const recent = capTranscript(transcript, HEADLINE_TRANSCRIPT_CHARS);
   let context = `RECENT CONVERSATION (oldest first; "You" = the user, "Them" = the other side):\n\n${recent || '(no transcript yet)'}`;
   if (Array.isArray(previousAnswers) && previousAnswers.length) {
@@ -1172,12 +1198,14 @@ function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnipp
     context += buildPreviousAnswersBlock(lastFew);
   }
   context += buildKnowledgeBlock(knowledgeSnippets);
+  if (stateBlock) context += `\n\n${stateBlock}`;
   context += describeScreenshots(images);
   let latest = '=== LATEST ===';
   const tail = recent ? latestLines(recent) : '';
   if (tail) latest += `\nLast lines of the conversation:\n${tail}`;
   if (question) latest += `\n\nQuestion to answer now (asked by Them): "${question}"`;
   else latest += '\n\nAnswer whatever was most recently asked or said above.';
+  if (direction) latest += `\n\n${direction}`;
   if (instruction) latest += `\n\nAdditional instruction from the user: ${instruction}`;
   if (kind === 'problem') latest += '\n\nThis is a new problem to solve.';
   else if (kind === 'followup') latest += '\n\nThis is a follow-up about what was already discussed.';
@@ -1328,11 +1356,13 @@ async function generateHeadline(params) {
   const { mode, questionKind: kind, intent, allowNoResponse } = suggestionAnalysis(params);
   const filter = typeof onChunk === 'function' ? createStreamHumanizer() : null;
   const model = headlineModel();
+  // Interview: the same state (trimmed) and the same Direction line as the full answer.
+  const { block: stateBlock, direction } = interviewStateFor(mode, params.interviewState, { headline: true });
   // Same prompt, context, intent and kind whichever model writes it.
   const req = {
     systemPrompt: buildHeadlineSystemPrompt(mode),
     parts: buildUserParts(buildHeadlineConversation({
-      transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse,
+      transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction,
     }), images),
     generationConfig: { temperature: 0.3 },
     thinkingLevel: 'minimal',
@@ -1505,6 +1535,7 @@ module.exports = {
   buildConversationText,
   buildUserParts,
   buildHeadlineSystemPrompt,
+  buildHeadlineConversation,
   firstSpokenSentence,
   looksTechnical,
   classifyQuestion,

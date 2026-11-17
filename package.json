@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/gesture-core.test.js test/ai-answers.test.js test/vad-core.test.js test/deepgram-core.test.js test/deepgram-stream.test.js test/pcm-core.test.js test/stt-core.test.js test/question-core.test.js test/intent-core.test.js test/early-start-core.test.js test/suggest-pipeline.test.js test/interview-session.test.js test/headline-model.test.js",
+    "test": "node --test test/gesture-core.test.js test/ai-answers.test.js test/vad-core.test.js test/deepgram-core.test.js test/deepgram-stream.test.js test/pcm-core.test.js test/stt-core.test.js test/question-core.test.js test/intent-core.test.js test/early-start-core.test.js test/suggest-pipeline.test.js test/interview-session.test.js test/headline-model.test.js test/interview-state.test.js",
     "gestures:fetch": "node scripts/fetch-gesture-assets.js",
     "electron:fetch": "install-electron",
     "postinstall": "node scripts/fetch-gesture-assets.js",
