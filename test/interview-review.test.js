@@ -187,3 +187,53 @@ test('new coding / design problem: a clarifying question first, commented code; 
   }
   assert.match(ai.buildHeadlineSystemPrompt('interview'), /A NEW coding or design problem: one short clarifying question to ask them first/);
 });
+
+// ---- Microsoft mock ----
+
+test('go-to story: the first story told for a theme comes first in later interviews, not twice in one', async () => {
+  const { createStoryStore } = require('../src/main/story-store');
+  const docs = [{ source: 'cv.md', text: 'Disagreed with my supervisor about auto-passing tests. Disagreed with my lead about caching. Built Ledgerly, a payments reconciliation service.' }];
+  const raw = { stories: [
+    { title: 'Caching', source: 'cv.md', action: 'I argued for measuring first.', quotes: ['Disagreed with my lead about caching'], themes: ['conflict'] },
+    { title: 'Auto-pass tests', source: 'cv.md', action: 'I asked to keep failing tests visible.', quotes: ['Disagreed with my supervisor about auto-passing tests'], themes: ['conflict'] },
+    { title: 'Ledgerly', source: 'cv.md', action: 'I built Ledgerly.', quotes: ['Built Ledgerly, a payments reconciliation service'], themes: ['impact'] },
+  ] };
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'echo-goto-')), 'story-bank.json');
+  const store = createStoryStore({ file, extract: async () => raw, getDocuments: () => docs, log: { warn() {} } });
+  await store.rebuild();
+  const q = 'Tell me about a time you disagreed with someone senior.';
+  // Interview 1: the user's answer tells the auto-pass story (2nd in the list).
+  const p1 = store.plan({ question: q });
+  assert.deepEqual(p1.picked.map((x) => x.title), ['Caching', 'Auto-pass tests'], 'no go-to yet: list order');
+  const told = store.noteAnswer(p1, q, 'My supervisor wanted tests to auto-pass; I disagreed and asked to keep failing tests visible.');
+  assert.equal(told.title, 'Auto-pass tests');
+  assert.deepEqual(store.get().stories.find((s) => s.title === 'Auto-pass tests').goToFor, ['conflict']);
+  // Interview 2 (new session, even after a restart): the same story first, marked.
+  store.resetSession();
+  const restarted = createStoryStore({ file, extract: async () => raw, getDocuments: () => docs, log: { warn() {} } });
+  const p2 = restarted.plan({ question: 'Describe a conflict with your manager.' });
+  assert.equal(p2.picked[0].title, 'Auto-pass tests');
+  assert.match(p2.block, /go-to story for a disagreement or conflict questions: tell it the same way as before/);
+  // Within that interview, once told, a second conflict question gets the other story.
+  restarted.noteAnswer(p2, 'Describe a conflict with your manager.', 'My supervisor wanted tests to auto-pass; I asked to keep failing tests visible.');
+  assert.equal(restarted.plan({ question: 'Tell me about another disagreement.' }).picked[0].title, 'Caching');
+  // Clearing the go-to frees the theme.
+  restarted.clearGoTo('conflict');
+  assert.deepEqual(restarted.get().stories.find((s) => s.title === 'Auto-pass tests').goToFor, []);
+});
+
+test('prompt: nobody looks bad, scaling follow-ups finished, complexities checked, no "first things first"; why-us specific', () => {
+  const B = require('../src/main/interview-brief');
+  for (const style of ['script', 'cues']) {
+    const system = ai.buildSystemPrompt('interview', style);
+    assert.match(system, /Never make another person look bad/);
+    assert.match(system, /Scaling follow-ups \(a stream, memory limits, very large data, several machines\): name the concrete technique/);
+    assert.match(system, /never stop at "we'd need something distributed"/);
+    assert.match(system, /Every complexity you state must match the operations it describes/);
+    assert.match(system, /"First things first"/);
+  }
+  assert.match(B.buildBriefBlock({ companyRole: 'Microsoft, SWE intern' }), /naming a specific team, product or engineering choice .* \[placeholder\] such as "\[a team or product you'd want to work on\]"/);
+  for (const q of ['What if the data is a stream that does not fit in memory?', 'How would you make it work across many machines?']) {
+    assert.equal(B.adjustThinkingLevel('low', { type: 'auto', kind: 'followup', quality: 'auto', question: q }), 'medium', q);
+  }
+});

@@ -1284,6 +1284,8 @@ function storyStatusText(view) {
   }
 }
 
+const GO_TO_WORDS = { conflict: 'disagreements', failure: 'failures', leadership: 'leading', pressure: 'pressure', ambiguity: 'ambiguity', customer: 'customers', impact: 'proudest work', teamwork: 'teamwork', challenge: 'challenges', learning: 'learning', initiative: 'initiative', technical_depth: 'technical depth' };
+
 function renderStories(view) {
   if (!view) return;
   storyToggle.checked = view.enabled;
@@ -1296,6 +1298,13 @@ function renderStories(view) {
       meta.className = 'story-meta';
       meta.textContent = s.source;
       li.appendChild(meta);
+    }
+    // Told before for these themes: Echo keeps using it so the story stays the same.
+    if (Array.isArray(s.goToFor) && s.goToFor.length) {
+      const tag = document.createElement('span');
+      tag.className = 'story-meta story-goto';
+      tag.textContent = `go-to for ${s.goToFor.map((t) => GO_TO_WORDS[t] || t.replace(/_/g, ' ')).join(', ')}`;
+      li.appendChild(tag);
     }
     return li;
   }));

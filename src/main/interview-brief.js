@@ -135,7 +135,7 @@ function buildBriefBlock(brief, summary) {
   if (b.companyRole || ad.text) {
     rules.push("Use the role and the ad to choose which of the user's real experiences to talk about and what to stress. They never add facts about the user.");
     rules.push('Facts about the company (products, values, news, numbers, the team) only if they are written in this brief; otherwise use a short [placeholder] such as "[something you like about their product]".');
-    rules.push('"Why this company / role?": lead with the user\'s own real connection to the company or its product from their files or notes (having used it, built on it, integrated it), then one concrete reason about this role. No abstract phrases ("reliability above everything", "robust infrastructure").');
+    rules.push('"Why this company / role?": lead with the user\'s own real connection to the company or its product from their files or notes (having used it, built on it, integrated it), then one concrete reason naming a specific team, product or engineering choice from this brief or ad. If the brief names none, use a [placeholder] such as "[a team or product you\'d want to work on]" rather than something every candidate says ("I use their product every day"). No abstract phrases ("reliability above everything", "robust infrastructure").');
   }
   if (ad.text) {
     rules.push("Asked about a skill or tool from the ad that isn't in the user's facts: be honest. Mention the closest thing they have actually done, or how they'd pick it up. Never claim it.");
@@ -231,8 +231,9 @@ function mentions(text, name) {
 // instead of 'low' (the code and its trade-offs are what's being judged).
 // Everything else keeps the usual Auto rule.
 // Any interview type: a follow-up about failure cases (a crash, retries,
-// two requests at once) also gets 'medium': it's where shallow answers show.
-const FAILURE_CASE_RE = /\b(crash\w*|fail(?:s|ed|ure|ures)?|goes? down|dies|restart\w*|retr(?:y|ies|ied)|time ?outs?|timed out|partial\w*|concurren\w*|race conditions?|at the same time|simultaneous\w*|twice|duplicates?|idempoten\w*|consisten\w*|network (?:split|partition|error))\b/i;
+// two requests at once) or scale (a stream, memory limits, many machines)
+// also gets 'medium': it's where shallow answers show.
+const FAILURE_CASE_RE = /\b(stream(?:s|ing)?|distributed|(?:many|multiple|several) machines|doesn'?t fit|memory limits?|(?:billions|millions) of|at scale|scale (?:it|this|that|up)|crash\w*|fail(?:s|ed|ure|ures)?|goes? down|dies|restart\w*|retr(?:y|ies|ied)|time ?outs?|timed out|partial\w*|concurren\w*|race conditions?|at the same time|simultaneous\w*|twice|duplicates?|idempoten\w*|consisten\w*|network (?:split|partition|error))\b/i;
 function adjustThinkingLevel(level, { type, kind, quality, question } = {}) {
   if (quality && quality !== 'auto') return level;
   if (kind !== 'followup' || level !== 'low') return level;

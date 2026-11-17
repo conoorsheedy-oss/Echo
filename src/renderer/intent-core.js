@@ -120,6 +120,7 @@
     /\b(explain|walk me through|talk me through|take me through|go through|run me through)\s+(why|how|what|your|the|this|that|it|line|each)\b/i,
     /\bhow (would|could|do|did|will|can) you (test|verify|debug|validate|check|handle|deal with|optimi[sz]e|improve|scale|extend|change|modify)\b|\btest cases?\b|\bunit tests?\b/i,
     /\b(edge|corner) cases?\b/i,
+    /\bhow (would|could|will|can|do) you (make|get) (it|this|that) (work|run|scale|handle|faster|fit)\b/i,
     /\b(can|could) you (optimi[sz]e|improve|speed|make it|do (it|this|that|better))\b|\bis there a (better|faster|more efficient|simpler|cleaner)\b|\bbetter (solution|approach|way)\b|\bany (way|optimi[sz]ations?)\b/i,
     /\btrade-?offs?\b|\binstead of\b/i,
     /\b(your|this|that|the above|the same) (code|solution|approach|function|implementation|algorithm|answer|loop|line|variable|data structure|recursion|query|design|method|class)\b/i,
@@ -132,7 +133,7 @@
   // Plain words that, after a technical answer, still point at the code.
   // Also the words of a technical follow-up that don't look technical on
   // their own ("what is the complexity of that?", "any trade-offs?").
-  const CODE_REFERENCE_RE = /\b(inputs?|outputs?|returns?|pairs?|elements?|values?|null|empty|duplicates?|negative|overflow|memory|loops?|index|indices|complexit(?:y|ies)|big[- ]?o|runtime|(?:edge|corner) cases?|trade-?offs?|test cases?|unit tests?|crash\w*|retr(?:y|ies|ied)|time ?outs?|concurren\w*|at the same time|simultaneous\w*|idempoten\w*|race conditions?|requests?|servers?|databases?|cache|fail(?:s|ed|ure)?|goes down|keys?|(your|the|this|that)( current)? (code|solution|approach|function|implementation|algorithm|method))\b/i;
+  const CODE_REFERENCE_RE = /\b(inputs?|outputs?|returns?|pairs?|elements?|values?|null|empty|duplicates?|negative|overflow|memory|loops?|index|indices|complexit(?:y|ies)|big[- ]?o|runtime|(?:edge|corner) cases?|trade-?offs?|test cases?|unit tests?|crash\w*|stream(?:s|ing)?|distributed|machines|scale|retr(?:y|ies|ied)|time ?outs?|concurren\w*|at the same time|simultaneous\w*|idempoten\w*|race conditions?|requests?|servers?|databases?|cache|fail(?:s|ed|ure)?|goes down|keys?|(your|the|this|that)( current)? (code|solution|approach|function|implementation|algorithm|method))\b/i;
   const FOLLOWUP_MAX_WORDS = 25; // a short question that references earlier work
   const LONG_PROBLEM_WORDS = 40; // a long technical prompt reads as a problem statement
 

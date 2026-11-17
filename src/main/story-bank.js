@@ -192,7 +192,16 @@ function themesForQuestion(question) {
 // The best stories for one question (most relevant first).
 //   keywords: role / ad words from the brief (optional)
 //   used: Map id -> the question it was used for, this session
-function pickStories(stories, { question, keywords = [], used = new Map(), k = 2 } = {}) {
+// A story's identity across rebuilds (ids S1.. and titles can change when
+// the files are re-read; the file and its first checked quote don't).
+function storyKey(s) {
+  return crypto.createHash('sha256').update(`${s.source || ''}\u0000${normalizeForMatch((s.quotes || [])[0] || s.title)}`).digest('hex').slice(0, 16);
+}
+
+// goTo: { theme: storyKey } -- the story already told for that theme in an
+// earlier answer (any session). Telling a different "disagreement" story in
+// every interview is a red flag, so the go-to story wins for its theme.
+function pickStories(stories, { question, keywords = [], used = new Map(), goTo = {}, k = 2 } = {}) {
   if (!Array.isArray(stories) || !stories.length) return [];
   const wanted = themesForQuestion(question);
   const qTokens = new Set(tokens(question).filter((w) => !QUESTION_STOPWORDS.has(w)));
@@ -210,19 +219,23 @@ function pickStories(stories, { question, keywords = [], used = new Map(), k = 2
     // Telling the same story twice for different questions looks thin: a told
     // story needs to fit clearly better (two theme matches) to come first again.
     score += used.has(s.id) ? -2.5 : 1;
+    // Across interviews the go-to story wins its theme; within one interview
+    // it still gives way once told, so two questions don't get one story.
+    if (!used.has(s.id) && wanted.some((t) => goTo[t] && goTo[t] === storyKey(s))) score += 5;
     return { s, score, i };
   });
   scored.sort((a, b) => b.score - a.score || a.i - b.i);
   return scored.slice(0, k).map((x) => x.s);
 }
 
-function storyLines(s, used) {
+function storyLines(s, used, goToThemes = []) {
   const lines = [`${s.id} "${s.title}"${s.source ? ` [From CV: ${s.source}]` : ''}${s.themes.length ? ` (${s.themes.join(', ').replace(/_/g, ' ')})` : ''}`];
   if (s.situation) lines.push(`  Situation: ${s.situation}`);
   lines.push(`  What they did: ${s.action}`);
   if (s.result) lines.push(`  Result: ${s.result}`);
   lines.push(`  Their words: ${s.quotes.map((q) => `"${q}"`).join(' | ')}`);
   if (used && used.has(s.id)) lines.push(`  (Already told this session, for: "${clean(used.get(s.id), 80)}")`);
+  if (goToThemes.length) lines.push(`  (Their go-to story for ${goToThemes.map((t) => THEME_WORDS[t] || t.replace(/_/g, ' ')).join(' / ')} questions: tell it the same way as before, same facts, same order, same part played by each person.)`);
   return lines.join('\n');
 }
 
@@ -230,11 +243,11 @@ function storyLines(s, used) {
 // project into a "disagreement" or "failure" story is how invented stories
 // happen. (impact / technical_depth fit most stories; no warning for those.)
 const STRICT_THEMES = ['conflict', 'failure', 'leadership', 'pressure', 'ambiguity', 'customer'];
-const THEME_WORDS = { conflict: 'a disagreement or conflict', failure: 'a failure or mistake', leadership: 'leading people', pressure: 'a tight deadline or pressure', ambiguity: 'an unclear situation', customer: 'a customer or stakeholder' };
+const THEME_WORDS = { conflict: 'a disagreement or conflict', failure: 'a failure or mistake', leadership: 'leading people', pressure: 'a tight deadline or pressure', ambiguity: 'an unclear situation', customer: 'a customer or stakeholder', impact: 'a proud achievement', teamwork: 'teamwork', challenge: 'a challenge', learning: 'learning something', initiative: 'taking initiative', technical_depth: 'a technical deep dive' };
 
 // The STORY BANK block for the full answer ('' when there's nothing).
 // question: lets it warn when no story has the theme the question asks for.
-function buildStoryBlock(picked, { used = new Map(), question = '' } = {}) {
+function buildStoryBlock(picked, { used = new Map(), question = '', goTo = {} } = {}) {
   if (!Array.isArray(picked) || !picked.length) return '';
   const head = "STORY BANK (the user's own stories, checked against their files; the quotes are word for word):";
   const wanted = themesForQuestion(question).filter((t) => STRICT_THEMES.includes(t));
@@ -246,8 +259,10 @@ function buildStoryBlock(picked, { used = new Map(), question = '' } = {}) {
     "If none of them really fits, don't stretch one: give the answer shape with [placeholders] instead.",
   ].map((r) => `- ${r}`).join('\n');
   let body = '';
+  const asked = themesForQuestion(question);
+  const goToThemesOf = (s) => asked.filter((t) => goTo[t] && goTo[t] === storyKey(s));
   for (const s of picked) {
-    const part = storyLines(s, used);
+    const part = storyLines(s, used, goToThemesOf(s));
     if (head.length + body.length + part.length + rules.length + 4 > STORY_BLOCK_MAX_CHARS) break;
     body += `${part}\n`;
   }
@@ -295,6 +310,7 @@ module.exports = {
   buildHeadlineStoryLine,
   storyToldIn,
   verifyDrafts,
+  storyKey,
   pickDraft,
   draftKey,
   MAX_DRAFTS,

@@ -16,6 +16,9 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
   let drafts = []; // ideas to confirm (story-bank.js verifyDrafts)
   // draft key -> 'confirmed' | 'rejected': never offered again, across rebuilds.
   let decisions = {};
+  // theme -> storyKey of the story told for it (kept across sessions and
+  // rebuilds), so the same question gets the same story every interview.
+  let goTo = {};
   let forDocs = '';
   let status = 'empty'; // empty | off | building | ready | failed | none_found
   let lastError = '';
@@ -25,7 +28,7 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
 
   function save() {
     try {
-      fs.writeFileSync(file, JSON.stringify({ version: 1, enabled, forDocs, stories, drafts, decisions }, null, 1));
+      fs.writeFileSync(file, JSON.stringify({ version: 1, enabled, forDocs, stories, drafts, decisions, goTo }, null, 1));
     } catch (err) {
       log.warn('[stories] Could not save the story bank:', err && err.message);
     }
@@ -41,7 +44,9 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
       stories = Array.isArray(data.stories) ? data.stories.filter((s) => s && typeof s.id === 'string' && typeof s.title === 'string' && Array.isArray(s.quotes)) : [];
       drafts = Array.isArray(data.drafts) ? data.drafts.filter((d) => d && typeof d.key === 'string' && typeof d.idea === 'string' && Array.isArray(d.themes)) : [];
       decisions = data.decisions && typeof data.decisions === 'object' ? data.decisions : {};
+      goTo = data.goTo && typeof data.goTo === 'object' ? data.goTo : {};
     } catch (err) {
+      goTo = {};
       enabled = true;
       stories = [];
       drafts = [];
@@ -120,7 +125,10 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
       status,
       error: lastError,
       count: stories.length,
-      stories: stories.map((s) => ({ id: s.id, title: s.title, source: s.source, themes: s.themes })),
+      stories: stories.map((s) => ({
+        id: s.id, title: s.title, source: s.source, themes: s.themes,
+        goToFor: Object.keys(goTo).filter((t) => goTo[t] === SB.storyKey(s)),
+      })),
       // Ideas still waiting for "it happened / something like it / didn't happen".
       drafts: openDrafts().map(draftView),
     };
@@ -157,11 +165,12 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
   // For one NEW behavioural question: the picked stories and their blocks.
   function plan({ question, keywords } = {}) {
     if (!enabled || status === 'off' || !stories.length) return null;
-    const picked = SB.pickStories(stories, { question, keywords, used });
+    const picked = SB.pickStories(stories, { question, keywords, used, goTo });
     if (!picked.length) return null;
     return {
       picked,
-      block: SB.buildStoryBlock(picked, { used, question }),
+      question,
+      block: SB.buildStoryBlock(picked, { used, question, goTo }),
       headlineLine: SB.buildHeadlineStoryLine(picked),
       diagnostic: `stories ${picked.map((s) => s.id).join(', ')}`,
     };
@@ -172,6 +181,14 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
     if (!storyPlan) return null;
     const told = SB.storyToldIn(answer, storyPlan.picked);
     if (told && !used.has(told.id)) used.set(told.id, String(question || '').slice(0, 200));
+    // The first story told for a theme becomes the go-to for it.
+    if (told) {
+      let changed = false;
+      for (const t of SB.themesForQuestion(question)) {
+        if (!goTo[t] && told.themes.includes(t)) { goTo[t] = SB.storyKey(told); changed = true; }
+      }
+      if (changed) save();
+    }
     return told;
   }
 
@@ -180,7 +197,15 @@ function createStoryStore({ file, extract, getDocuments, log = console } = {}) {
   }
 
   load();
-  return { get: view, rebuild, setEnabled, plan, noteAnswer, resetSession, draftFor, decideDraft, _used: used };
+  // The user can free a theme ("pick again next time").
+  function clearGoTo(theme) {
+    if (theme === undefined) goTo = {};
+    else delete goTo[theme];
+    save();
+    return view();
+  }
+
+  return { get: view, rebuild, setEnabled, plan, noteAnswer, resetSession, draftFor, decideDraft, clearGoTo, _used: used };
 }
 
 module.exports = { createStoryStore };

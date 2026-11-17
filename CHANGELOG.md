@@ -2,6 +2,13 @@
 
 ## 0.2.0 – unreleased
 
+- **Fixes from the Microsoft mock.**
+  - **Same story every time.** The first story told for a theme (a disagreement, a failure, leading...) becomes your go-to for it, kept across interviews and rebuilds: next time it's picked first and told the same way (same facts, same order, same part for each person). Within one interview it still gives way once told. The Knowledge drawer shows "go-to for disagreements" next to it.
+  - **Nobody looks bad:** a disagreement is two reasonable views and how it was settled, never someone careless or hiding something.
+  - **Scaling follow-ups finished** (a stream, memory limits, several machines): the concrete technique and how the parts combine, never just "we'd need something distributed". They're detected as follow-ups ("how would you make it work across many machines?") and think at `medium`. Every stated complexity is checked against its operations.
+  - **"Why this company?"** names a specific team, product or engineering choice from the brief or ad, or a [placeholder] for one, never the line every candidate says.
+  - "First things first" joins the banned phrases.
+
 - **Story builder.** When Echo builds your story bank it also drafts story *ideas* from your project details (a failover feature -> something broke; a fixed bug -> a mistake you caught), one per theme your real stories don't cover. Each is tied to an exact line from your files and adds no numbers. In Interview mode, a behavioural question with no matching story shows the idea on the answer card, dashed and marked "not confirmed", with **It happened** / **Something like it** (fix it first) / **Didn't happen**. The answer itself never uses an unconfirmed idea. Confirmed ones are saved to `my-stories.md` and become real stories; rejected ones never come back. The same ideas are listed in the Knowledge drawer to go through before an interview.
 
 - **Engage before coding.** A new coding or design problem now opens with one short clarifying question for you to ask (input size, an edge case, the time complexity they want, or for design the scale), about something the problem doesn't already say; the approach, walk-through and code follow for when they answer. The instant first line is that question too.

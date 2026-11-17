@@ -1490,6 +1490,7 @@ option {
   overflow-wrap: anywhere;
 }
 .story-list .story-meta { color: var(--text-subtle); margin-left: var(--sp-2); }
+.story-list .story-goto { color: var(--accent-text); }
 .add-story summary {
   cursor: pointer;
   font-size: var(--fs-sm);
