@@ -329,3 +329,13 @@ test('Answers = Detailed: no TRUTH FIRST or placeholders, longer answers; Strict
   assert.match(calls[0].systemInstruction.parts[0].text, /about 200-300 spoken words/);
   assert.match(calls[1].systemInstruction.parts[0].text, /TRUTH FIRST/);
 });
+
+test('Detailed keeps the clarifying question and bans "First, Second, Third"; numbers must agree', () => {
+  const detailed = ai.buildSystemPrompt('interview', 'script', 'detailed');
+  assert.match(detailed, /A NEW coding or design problem still follows the technical rules below: the opening line is ONE clarifying question/);
+  assert.match(detailed, /never "First, \.\.\. Second, \.\.\. Third, \.\.\."/);
+  for (const sys of [detailed, ai.buildSystemPrompt('interview', 'script')]) {
+    assert.match(sys, /Numbers in one answer must agree with each other/);
+    assert.match(sys, /spoken enumerations \("First, \.\.\. Second, \.\.\. Third, \.\.\."\)/);
+  }
+});
