@@ -2,6 +2,9 @@
 
 ## 0.2.0 – unreleased
 
+- **Your intro (brief).** A new optional field for your real "tell me about yourself" answer. Echo uses it every time (same facts, same order, your words), only shortening it or pointing the last line at the role; the first line opens with it. No more different intro each time.
+- **No upgraded facts:** year of study, title, seniority ("final year"), how long ago, how big a speed-up: only exactly as written. "I'm excited", "excited about" and "which is why I'm…" closers are banned; Ask panel lines stay under ~15 words.
+
 - **Fixes from the Microsoft mock.**
   - **Same story every time.** The first story told for a theme (a disagreement, a failure, leading...) becomes your go-to for it, kept across interviews and rebuilds: next time it's picked first and told the same way (same facts, same order, same part for each person). Within one interview it still gives way once told. The Knowledge drawer shows "go-to for disagreements" next to it.
   - **Nobody looks bad:** a disagreement is two reasonable views and how it was settled, never someone careless or hiding something.

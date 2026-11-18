@@ -15,6 +15,7 @@ const LIMITS = {
   companyRole: 200,
   jobAd: 12_000,
   notes: 2_000,
+  intro: 1_200,
 };
 
 const TYPES = ['auto', 'behavioural', 'coding', 'system_design', 'hr_screen', 'mixed'];
@@ -62,12 +63,13 @@ function normalizeBrief(raw) {
     jobAd: cleanText(b.jobAd, LIMITS.jobAd),
     type: normalizeType(b.type),
     notes: cleanText(b.notes, LIMITS.notes),
+    intro: cleanText(b.intro, LIMITS.intro),
   };
 }
 
 function isEmptyBrief(brief) {
   const b = normalizeBrief(brief);
-  return !b.companyRole && !b.jobAd && !b.notes && b.type === 'auto';
+  return !b.companyRole && !b.jobAd && !b.notes && !b.intro && b.type === 'auto';
 }
 
 function adHash(jobAd) {
@@ -131,6 +133,10 @@ function buildBriefBlock(brief, summary) {
   if (b.notes) {
     lines.push('Notes from the user ([From brief] = their own facts, as reliable as [You said]):', noteLines(b.notes, NOTES_BLOCK_CHARS));
   }
+  if (b.intro) {
+    lines.push('The user\'s own intro, for "tell me about yourself" / "walk me through your background" ([From brief], their words):', clipLines(b.intro, LIMITS.intro));
+    lines.push('- For those questions, use this intro: same facts, same order, in their words. Only shorten it or point its last line at this role. Never add to it.');
+  }
   const rules = [];
   if (b.companyRole || ad.text) {
     rules.push("Use the role and the ad to choose which of the user's real experiences to talk about and what to stress. They never add facts about the user.");
@@ -156,6 +162,8 @@ function buildHeadlineBriefBlock(brief, summary) {
   if (b.type !== 'auto') parts.push(`Interview type: ${TYPE_LABELS[b.type]}`);
   const ad = adForPrompt(b, summary);
   if (ad.text) parts.push(`Job ad: ${ad.text.split('\n').filter((l) => l.trim()).slice(0, 2).join(' / ')}`);
+  // "Tell me about yourself": the first line opens the user's own intro.
+  if (b.intro) parts.push(`Their intro for "tell me about yourself" starts: "${b.intro.split(/(?<=[.!?])\s+/)[0].slice(0, 160)}"`);
   if (b.notes) parts.push(noteLines(b.notes, 200));
   let body = parts.join('\n');
   const head = 'INTERVIEW BRIEF (from the user; company facts only from here, never invented):\n';
@@ -256,6 +264,7 @@ function describeBrief(brief, summary, status) {
     bits.push(`ad ✓ (${how})`);
   }
   if (b.notes) bits.push('notes ✓');
+  if (b.intro) bits.push('intro ✓');
   let s = `Brief: ${bits.join(' ') || 'type only'}`;
   if (b.type !== 'auto') s += ` · type ${TYPE_LABELS[b.type]}`;
   return s;

@@ -237,3 +237,21 @@ test('prompt: nobody looks bad, scaling follow-ups finished, complexities checke
     assert.equal(B.adjustThinkingLevel('low', { type: 'auto', kind: 'followup', quality: 'auto', question: q }), 'medium', q);
   }
 });
+
+// ---- "Tell me about yourself" ----
+
+test('brief intro: used for "tell me about yourself" in both answers; no upgraded facts; no "excited" closers', () => {
+  const B = require('../src/main/interview-brief');
+  const intro = "I'm a second-year CS and Statistics student at Maynooth. I built a NIST randomness testing framework at the Hamilton Institute. Before that I did backend work at PayDai.";
+  const brief = { companyRole: 'Microsoft, SWE intern', intro };
+  assert.ok(!B.isEmptyBrief({ intro }));
+  const block = B.buildBriefBlock(brief);
+  assert.ok(block.includes(intro));
+  assert.match(block, /same facts, same order, in their words\. Only shorten it or point its last line at this role\. Never add to it\./);
+  assert.match(B.buildHeadlineBriefBlock(brief), /Their intro for "tell me about yourself" starts: "I'm a second-year CS and Statistics student at Maynooth\."/);
+  assert.match(B.describeBrief(brief), /intro ✓/);
+  assert.equal(B.normalizeBrief({ intro: 'x'.repeat(5000) }).intro.length, B.LIMITS.intro);
+  const system = ai.buildSystemPrompt('interview', 'script');
+  assert.match(system, /Don't work facts out or upgrade them: the user's year of study, title, seniority or "final year"/);
+  assert.match(system, /"I'm excited", "excited about", "which is why I'm"/);
+});

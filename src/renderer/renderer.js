@@ -1377,6 +1377,7 @@ const briefCompanyRole = document.getElementById('brief-company-role');
 const briefType = document.getElementById('brief-type');
 const briefJobAd = document.getElementById('brief-job-ad');
 const briefNotes = document.getElementById('brief-notes');
+const briefIntro = document.getElementById('brief-intro');
 const briefStatusEl = document.getElementById('brief-status');
 const briefBadge = document.getElementById('brief-badge');
 const saveBriefBtn = document.getElementById('save-brief-btn');
@@ -1402,6 +1403,7 @@ function renderBrief(view, { fillForm = false } = {}) {
     briefType.value = view.brief.type || 'auto';
     briefJobAd.value = view.brief.jobAd || '';
     briefNotes.value = view.brief.notes || '';
+    briefIntro.value = view.brief.intro || '';
   }
   briefBadge.textContent = view.empty ? '' : '✓';
   briefBadge.classList.toggle('hidden', !!view.empty);
@@ -1432,6 +1434,7 @@ briefForm.addEventListener('submit', async (e) => {
       type: briefType.value,
       jobAd: briefJobAd.value,
       notes: briefNotes.value,
+      intro: briefIntro.value,
     });
     renderBrief(view, { fillForm: true });
     showToast(view.empty ? 'Brief cleared' : 'Brief saved');

@@ -76,8 +76,8 @@ async function suggest(params) {
 // ---- 1. the brief itself ----
 
 test('normalizeBrief: every field optional, capped, unknown type -> auto', () => {
-  assert.deepEqual(B.normalizeBrief(undefined), { companyRole: '', jobAd: '', type: 'auto', notes: '' });
-  assert.deepEqual(B.normalizeBrief({ type: 'nonsense', companyRole: 42 }), { companyRole: '', jobAd: '', type: 'auto', notes: '' });
+  assert.deepEqual(B.normalizeBrief(undefined), { companyRole: '', jobAd: '', type: 'auto', notes: '', intro: '' });
+  assert.deepEqual(B.normalizeBrief({ type: 'nonsense', companyRole: 42 }), { companyRole: '', jobAd: '', type: 'auto', notes: '', intro: '' });
   const b = B.normalizeBrief({ companyRole: ' Stripe,\nSWE intern ', jobAd: 'x'.repeat(20000), notes: 'n'.repeat(5000), type: 'coding' });
   assert.equal(b.companyRole, 'Stripe, SWE intern');
   assert.equal(b.jobAd.length, B.LIMITS.jobAd);

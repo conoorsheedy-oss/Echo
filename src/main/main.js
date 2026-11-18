@@ -1082,6 +1082,7 @@ function validateBriefPayload(payload) {
   assertOptionalString(payload.companyRole, 'companyRole', interviewBrief.LIMITS.companyRole * 2);
   assertOptionalString(payload.jobAd, 'jobAd', interviewBrief.LIMITS.jobAd * 2);
   assertOptionalString(payload.notes, 'notes', interviewBrief.LIMITS.notes * 2);
+  assertOptionalString(payload.intro, 'intro', interviewBrief.LIMITS.intro * 2);
   assertOptionalString(payload.type, 'type', 40);
   return payload;
 }
