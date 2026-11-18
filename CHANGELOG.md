@@ -2,6 +2,8 @@
 
 ## 0.2.0 – unreleased
 
+- **Ask panel in Interview mode answers interviewer questions like the answer card.** Typing "Design a URL shortener" or "Tell me about yourself" into Ask now gets the full interview answer (same prompt, rules, format, thinking level, brief and story bank as a spoken question). Questions for the assistant ("what should I say?", "what did they mean?", "summarise") still get the chat reply.
+
 - **Settings > Answers: Detailed (default) or Strict.** Detailed (adapted from a friend's fork) gives longer, richer answers (about 200-300 spoken words for big behavioural questions and project walkthroughs) and drops the strict fact rules: no TRUTH FIRST, no [placeholder] fallback, no "never add a setback" rule. Check names, numbers and stories before you say them. Strict is the previous behaviour: short answers, only facts from your files, [placeholders] for anything missing.
 
 - **Better grounding (ideas from a friend's fork).** Search counts generic interview words ("tell", "time", "project", "experience"...) at a fraction, scores very short chunks as if longer, and returns at most 2 snippets per file. Plans and cheat sheets aren't treated as proof: "what to say", "suggested tests", "future improvements" are suggestions, and prototyped / approved / shipped / measured stay separate. Technical details the files don't cover are explained as an example ("if I were building it..."), never as the user's own work.

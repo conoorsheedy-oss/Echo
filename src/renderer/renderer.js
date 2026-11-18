@@ -3162,6 +3162,7 @@ chatForm.addEventListener('submit', async (e) => {
       previousAnswers: previousAnswersForSend(),
       quality: currentQuality(),
       detail: currentDetail(),
+      answerStyle: currentAnswerStyle(),
       images: shots.images,
     });
     screenshotsSent(shots.ids);

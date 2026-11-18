@@ -339,3 +339,26 @@ test('Detailed keeps the clarifying question and bans "First, Second, Third"; nu
     assert.match(sys, /spoken enumerations \("First, \.\.\. Second, \.\.\. Third, \.\.\."\)/);
   }
 });
+
+test('Ask panel in Interview mode: an interviewer question gets the interview answer; a help request gets chat', async () => {
+  assert.ok(ai.isInterviewerQuestion('Design a URL shortener, like bit.ly.'));
+  assert.ok(ai.isInterviewerQuestion('Tell me about yourself'));
+  for (const q of ['What should I say?', 'what did they mean by sharding', 'summarise the interview so far', 'How do I answer this?']) assert.ok(!ai.isInterviewerQuestion(q), q);
+  const calls = [];
+  global.fetch = async (url, init) => {
+    calls.push(JSON.parse(init.body));
+    return new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'How many links a day are we expecting?' }] }, finishReason: 'STOP' }] })}\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  };
+  const text = await ai.askFollowUp({ transcript: '', question: 'Design a URL shortener, like bit.ly.', mode: 'interview', detail: 'detailed', answerStyle: 'script', onChunk: () => {} });
+  assert.equal(typeof text, 'string');
+  const sys = calls[0].systemInstruction.parts[0].text;
+  assert.match(sys, /the opening line is ONE clarifying question/);
+  assert.match(sys, /Spoken lines never contain code/);
+  const body = calls[0].contents[0].parts.map((p) => p.text || '').join('\n');
+  assert.match(body, /Question type: a NEW problem to solve/);
+  assert.equal(calls[0].generationConfig.thinkingConfig.thinkingLevel, 'high', 'a new design problem thinks hard');
+  // Meeting mode: always chat.
+  calls.length = 0;
+  await ai.askFollowUp({ transcript: '', question: 'Design a URL shortener', mode: 'meeting', onChunk: () => {} });
+  assert.ok(!/Interview rules:/.test(calls[0].systemInstruction.parts[0].text));
+});

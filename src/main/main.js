@@ -1141,7 +1141,7 @@ handle('stories:rebuild', async () => {
   return storyView(storyStore.get());
 });
 
-handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAnswers, quality, images, detail } = {}) => {
+handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAnswers, quality, images, detail, answerStyle } = {}) => {
   const id = validateRequestId(requestId);
   assertOptionalString(transcript, 'transcript', MAX_TRANSCRIPT_CHARS);
   assertOptionalString(question, 'question', 4000);
@@ -1178,6 +1178,7 @@ handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAn
       knowledgeSnippets,
       brief: briefPlan,
       detail: validateDetail(detail),
+      answerStyle: validateAnswerStyle(answerStyle),
       stories: storyPlan ? { block: storyPlan.block, headlineLine: storyPlan.headlineLine } : null,
       signal: req.signal,
       onChunk: chunkForwarder(evt, id),

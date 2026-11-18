@@ -1540,9 +1540,27 @@ async function generateHeadline(params) {
   return { text: firstSpokenSentence(humanizeAnswer(result.text)), questionKind: kind, intent };
 }
 
+// Typed into the Ask panel in Interview mode: is it a question for the
+// assistant ("what should I say?", "what did they mean?") or an interviewer's
+// question the user wants answered as them ("Design a URL shortener", "Tell
+// me about yourself")? The second kind gets the full interview answer.
+const ASK_META_RE = /\b(?:should i|do i|can i|could i|shall i|would i|how (?:do|can|should|would) i|what (?:do|should|can) i|help me|for me to|what (?:did|does|do) (?:they|he|she|the interviewer) (?:mean|want|say|ask)|what did (?:they|he|she|the interviewer)|what are they (?:asking|looking for)|summari[sz]e|recap|remind me|rewrite|rephrase|reword|translate|shorter|longer version|make (?:it|this|that) )/i;
+function isInterviewerQuestion(question) {
+  const q = String(question || '').trim();
+  return !!q && !ASK_META_RE.test(q);
+}
+
 async function askFollowUp({
-  transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, brief, stories, detail, signal, onChunk,
+  transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, brief, stories, detail, answerStyle, signal, onChunk,
 }) {
+  if (normalizeMode(mode) === 'interview' && isInterviewerQuestion(question)) {
+    // The same prompt, rules and format as a spoken question.
+    const result = await generateSuggestion({
+      transcript, question, previousAnswers, images, knowledgeSnippets, mode: 'interview', quality, brief, stories, detail,
+      answerStyle, requestKind: 'explicit', signal, onChunk,
+    });
+    return result.text;
+  }
   const hasImages = !!(images && images.length);
   const kind = classifyQuestion(question, { hasImages, ...priorContext(previousAnswers) });
   const thinkingLevel = resolveThinkingLevel({ mode, quality, kind });
@@ -1785,6 +1803,7 @@ module.exports = {
   askFollowUp,
   summarizeSession,
   summarizeJobAd,
+  isInterviewerQuestion,
   DETAIL_LEVELS,
   normalizeDetail,
   invitesQuestions,

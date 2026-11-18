@@ -307,9 +307,16 @@ test('Ask panel: grounding + spoken-answer rules; a typed behavioural question g
   };
   const withStories = await ask({ stories: { block: plan.block, headlineLine: plan.headlineLine } });
   const sys = withStories.body.systemInstruction.parts[0].text;
+  // An interviewer's question typed into Ask gets the full interview prompt.
   assert.match(sys, /TRUTH FIRST/);
-  assert.match(sys, /No intro line \("Here's an answer you can give"\), no quotation marks around it, no closing moral/);
-  assert.match(sys, /no extra numbers, team sizes, durations, results, setbacks/);
+  assert.match(sys, /Interview rules:/);
+  // A question FOR the assistant still gets the chat prompt and its rules.
+  const meta = captureFetch();
+  await ai.askFollowUp({ transcript: '', question: 'What should I say if they ask about leading a team?', mode: 'interview', onChunk: () => {} });
+  const metaSys = meta[0].body.systemInstruction.parts[0].text;
+  assert.match(metaSys, /No intro line \("Here's an answer you can give"\), no quotation marks around it, no closing moral/);
+  assert.match(metaSys, /no extra numbers, team sizes, durations, results, setbacks/);
+  assert.ok(!/Interview rules:/.test(metaSys));
   const text = allText(withStories.body);
   assert.ok(text.includes(plan.block));
   assert.ok(!text.includes('No background about the user was provided'));
