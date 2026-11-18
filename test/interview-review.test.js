@@ -273,3 +273,20 @@ test('knowledge: a heading stays with its text; intro questions find the profile
   assert.match(ai.buildSystemPrompt('interview', 'script'), /Never describe something from its name/);
   assert.match(ai.buildSystemPrompt('interview', 'script'), /marks as planned, in progress or not built yet is only ever mentioned as planned/);
 });
+
+test('search: generic interview words barely count, tiny chunks can\'t win, max 2 per file', () => {
+  const knowledge = require('../src/main/knowledge');
+  const dir = knowledge.KNOWLEDGE_DIR;
+  for (const f of fs.readdirSync(dir)) if (/\.(txt|md)$/.test(f) && f !== 'README.txt') fs.unlinkSync(path.join(dir, f));
+  const para = (t) => `${t} ${'filler words about nothing in particular here. '.repeat(6)}`;
+  fs.writeFileSync(path.join(dir, 'plan.txt'), [para('Tell me about a time: project experience example.'), para('Another tell time project experience example line.'), para('Yet another time project example.'), para('Kafka consumer lag fix one.')].join('\n\n'));
+  fs.writeFileSync(path.join(dir, 'notes.txt'), para('Kafka consumer lag: I fixed the partition rebalancing.'));
+  knowledge.loadKnowledgeBase();
+  const hits = knowledge.searchKnowledge('Tell me about a time you fixed Kafka consumer lag on a project.');
+  assert.equal(hits[0].source, 'notes.txt', 'the topic word wins over "tell / time / project"');
+  assert.ok(hits.filter((h) => h.source === 'plan.txt').length <= 2, 'at most 2 per file');
+  const system = ai.buildSystemPrompt('interview', 'script');
+  assert.match(system, /Notes are not proof: in plans, cheat sheets and prep files, sections like "what to say"/);
+  assert.match(system, /what was prototyped, what someone approved, what was shipped and what was measured/);
+  assert.match(system, /frame it as an example \("For example, if I were building it, I'd\.\.\."\), never as something the user did/);
+});

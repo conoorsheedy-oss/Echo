@@ -153,6 +153,20 @@ function isIntroQuestion(query) {
   return INTRO_RE.test(String(query || ''));
 }
 
+// Interview questions are full of words every file has ("tell me about a
+// time... project... experience"). They still count, but barely, so the
+// words that actually name the topic decide the match.
+const GENERIC_WORDS = new Set(('tell time example project projects experience technical challenge challenging difficult problem solve solved '
+  + 'approach work worked working describe discuss detail details software engineering engineer interview question questions situation '
+  + 'task action result give walk through talk bit little like way thing things something someone more most really').split(' '));
+const GENERIC_WEIGHT = 0.12;
+// A very short chunk can't win on two lucky words: score as if it had at
+// least this many words.
+const MIN_SCORED_TOKENS = 8;
+// At most this many snippets from one file, so one long file (a plan, a cheat
+// sheet) can't crowd out the rest. Preferred (thread) snippets don't count.
+const MAX_PER_FILE = 2;
+
 function searchKnowledge(query, topK = 4, opts = undefined) {
   if (!chunks.length || !query) return [];
 
@@ -167,18 +181,25 @@ function searchKnowledge(query, topK = 4, opts = undefined) {
   const scored = chunks.map((c) => {
     let overlap = 0;
     for (const t of c.tokens) {
-      if (queryCounts[t]) overlap += queryCounts[t];
+      if (queryCounts[t]) overlap += GENERIC_WORDS.has(t) ? GENERIC_WEIGHT * queryCounts[t] : queryCounts[t];
     }
-    let score = c.tokens.length ? overlap / Math.sqrt(c.tokens.length) : 0;
+    let score = c.tokens.length ? overlap / Math.sqrt(Math.max(MIN_SCORED_TOKENS, c.tokens.length)) : 0;
     if (score > 0 && prefer.length && isPreferred(c)) score *= PREFER_BOOST;
     if (score > 0 && intro && PROFILE_FILE_RE.test(c.source)) score *= PROFILE_BOOST;
     return { ...c, score };
   });
 
-  return scored
-    .filter((c) => c.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
+  const ranked = scored.filter((c) => c.score > 0).sort((a, b) => b.score - a.score);
+  const out = [];
+  const perFile = new Map();
+  for (const c of ranked) {
+    const n = perFile.get(c.source) || 0;
+    if (n >= MAX_PER_FILE && !(prefer.length && isPreferred(c))) continue;
+    out.push(c);
+    perFile.set(c.source, n + 1);
+    if (out.length >= topK) break;
+  }
+  return out;
 }
 
 function getStatus() {

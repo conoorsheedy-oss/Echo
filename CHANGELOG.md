@@ -2,6 +2,8 @@
 
 ## 0.2.0 – unreleased
 
+- **Better grounding (ideas from a friend's fork).** Search counts generic interview words ("tell", "time", "project", "experience"...) at a fraction, scores very short chunks as if longer, and returns at most 2 snippets per file. Plans and cheat sheets aren't treated as proof: "what to say", "suggested tests", "future improvements" are suggestions, and prototyped / approved / shipped / measured stay separate. Technical details the files don't cover are explained as an example ("if I were building it..."), never as the user's own work.
+
 - **Fix: invented project details in "tell me about yourself".** Keyword search was returning a bare heading ("Project deep-dive 1: ovgraph (lead with this)") instead of the profile, and the model described the project from its name. Short headings now always stay with the paragraph under them; intro questions ("tell me about yourself", "walk me through your CV") also search with profile words and favour profile / about / CV files; and the prompt forbids describing anything from its name alone.
 
 - **Your intro (brief).** A new optional field for your real "tell me about yourself" answer. Echo uses it every time (same facts, same order, your words), only shortening it or pointing the last line at the role; the first line opens with it. No more different intro each time.
