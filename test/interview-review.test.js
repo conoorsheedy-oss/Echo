@@ -271,4 +271,5 @@ test('knowledge: a heading stays with its text; intro questions find the profile
   const top = knowledge.searchKnowledge('Tell me about yourself.')[0];
   assert.equal(top.source, 'my_profile.txt');
   assert.match(ai.buildSystemPrompt('interview', 'script'), /Never describe something from its name/);
+  assert.match(ai.buildSystemPrompt('interview', 'script'), /marks as planned, in progress or not built yet is only ever mentioned as planned/);
 });
