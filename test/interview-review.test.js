@@ -255,3 +255,20 @@ test('brief intro: used for "tell me about yourself" in both answers; no upgrade
   assert.match(system, /Don't work facts out or upgrade them: the user's year of study, title, seniority or "final year"/);
   assert.match(system, /"I'm excited", "excited about", "which is why I'm"/);
 });
+
+test('knowledge: a heading stays with its text; intro questions find the profile, not a plan heading', () => {
+  const knowledge = require('../src/main/knowledge');
+  const chunks = knowledge.splitIntoChunks(`Project deep-dive 1: ovgraph (lead with this)\n\n${'One line: a Python tool that turns OpenVINO graphs into readable diagrams. Solo, 82 tests. '.repeat(9)}`);
+  assert.ok(chunks[0].startsWith('Project deep-dive 1: ovgraph'));
+  assert.match(chunks[0], /a Python tool that turns OpenVINO graphs/, 'the heading is not a chunk on its own');
+  for (const q of ['Tell me about yourself.', 'tell me a bit about yourself', 'Walk me through your CV', "What's your background?"]) assert.ok(knowledge.isIntroQuestion(q), q);
+  assert.ok(!knowledge.isIntroQuestion('Tell me about a time you failed.'));
+  // Real-ish files: a plan with a heading and a profile.
+  const dir = knowledge.KNOWLEDGE_DIR;
+  fs.writeFileSync(path.join(dir, 'Interview_plan.txt'), `Project deep-dive 1: ovgraph (lead with this)\nTell it in 2 minutes, then let them dig:\n\n${'| Question | Story |\n'.repeat(60)}`);
+  fs.writeFileSync(path.join(dir, 'my_profile.txt'), 'Maynooth University, B.A. Computer Science and Statistics, currently 2nd year student. Research intern at the Hamilton Institute. Built ovgraph, a Python tool for OpenVINO graphs.');
+  knowledge.loadKnowledgeBase();
+  const top = knowledge.searchKnowledge('Tell me about yourself.')[0];
+  assert.equal(top.source, 'my_profile.txt');
+  assert.match(ai.buildSystemPrompt('interview', 'script'), /Never describe something from its name/);
+});

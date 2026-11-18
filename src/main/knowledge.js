@@ -14,6 +14,10 @@ const { app } = require('electron');
 // needs to open the source tree to find it.
 const KNOWLEDGE_DIR = path.join(app.getPath('userData'), 'knowledge');
 const CHUNK_SIZE = 700; // rough character budget per chunk
+// A heading or one-liner shorter than this always joins the paragraph after
+// it: alone it can win a search while saying nothing ("Project deep-dive 1:
+// ovgraph (lead with this)"), and the model then guesses what the name means.
+const MIN_CHUNK = 200;
 const MAX_FILE_CHARS = 2_000_000; // ~2MB of text — generous for a CV/notes file, cheap to enforce
 
 const STOPWORDS = new Set([
@@ -66,7 +70,7 @@ function splitIntoChunks(text) {
   const result = [];
   let buffer = '';
   for (const p of paragraphs) {
-    if (buffer && (buffer.length + p.length + 2) > CHUNK_SIZE) {
+    if (buffer && buffer.length >= MIN_CHUNK && (buffer.length + p.length + 2) > CHUNK_SIZE) {
       result.push(buffer.trim());
       buffer = p;
     } else {
@@ -136,11 +140,25 @@ function loadKnowledgeBase() {
 // (score > 0), and the result is still the top K overall. Without opts the
 // ranking is exactly as before.
 const PREFER_BOOST = 1.5;
+
+// "Tell me about yourself" / "walk me through your CV" share almost no words
+// with a CV, so plain keyword search finds headings and plans instead of the
+// profile. For these, search with profile words too and favour files named
+// like a profile / CV.
+const INTRO_RE = /\b(?:tell me (?:a (?:bit|little) )?about yourself|introduce yourself|walk me through your (?:cv|resume|résumé|background|career|experience)|(?:what's|what is|tell me about) your background|who are you)\b/i;
+const INTRO_WORDS = 'student studying university degree year currently intern internship research project projects built backend experience';
+const PROFILE_FILE_RE = /profile|about|cv|resume|bio/i;
+const PROFILE_BOOST = 1.6;
+function isIntroQuestion(query) {
+  return INTRO_RE.test(String(query || ''));
+}
+
 function searchKnowledge(query, topK = 4, opts = undefined) {
   if (!chunks.length || !query) return [];
 
+  const intro = isIntroQuestion(query);
   const queryCounts = {};
-  for (const t of tokenize(query)) queryCounts[t] = (queryCounts[t] || 0) + 1;
+  for (const t of tokenize(intro ? `${query} ${INTRO_WORDS}` : query)) queryCounts[t] = (queryCounts[t] || 0) + 1;
   if (!Object.keys(queryCounts).length) return [];
 
   const prefer = opts && Array.isArray(opts.prefer) ? opts.prefer : [];
@@ -153,6 +171,7 @@ function searchKnowledge(query, topK = 4, opts = undefined) {
     }
     let score = c.tokens.length ? overlap / Math.sqrt(c.tokens.length) : 0;
     if (score > 0 && prefer.length && isPreferred(c)) score *= PREFER_BOOST;
+    if (score > 0 && intro && PROFILE_FILE_RE.test(c.source)) score *= PROFILE_BOOST;
     return { ...c, score };
   });
 
@@ -194,4 +213,4 @@ function getDocuments() {
   return documents.map((d) => ({ ...d }));
 }
 
-module.exports = { loadKnowledgeBase, searchKnowledge, getStatus, getDocuments, addStory, KNOWLEDGE_DIR };
+module.exports = { loadKnowledgeBase, searchKnowledge, getStatus, getDocuments, addStory, isIntroQuestion, splitIntoChunks, KNOWLEDGE_DIR };

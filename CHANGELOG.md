@@ -2,6 +2,8 @@
 
 ## 0.2.0 – unreleased
 
+- **Fix: invented project details in "tell me about yourself".** Keyword search was returning a bare heading ("Project deep-dive 1: ovgraph (lead with this)") instead of the profile, and the model described the project from its name. Short headings now always stay with the paragraph under them; intro questions ("tell me about yourself", "walk me through your CV") also search with profile words and favour profile / about / CV files; and the prompt forbids describing anything from its name alone.
+
 - **Your intro (brief).** A new optional field for your real "tell me about yourself" answer. Echo uses it every time (same facts, same order, your words), only shortening it or pointing the last line at the role; the first line opens with it. No more different intro each time.
 - **No upgraded facts:** year of study, title, seniority ("final year"), how long ago, how big a speed-up: only exactly as written. "I'm excited", "excited about" and "which is why I'm…" closers are banned; Ask panel lines stay under ~15 words.
 
