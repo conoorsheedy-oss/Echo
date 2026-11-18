@@ -338,6 +338,19 @@ const SCRIPT_STYLE = `\nAnswer style: SCRIPT. The user will say this out loud, g
 - Minimal formatting: plain sentences. No headings, no bullet lists, no tables, no LaTeX. You may **bold** one or two key words (never whole sentences).
 - Never invent projects, employers, numbers or experience that aren't in the transcript or the user's background material. If a detail is missing, keep it general.`;
 
+// Settings > Answers = Detailed (adapted from a friend's fork): longer,
+// richer spoken answers, without the strict fact rules (TRUTH FIRST, the
+// [placeholder] fallback). Strict (the other choice) is everything above.
+const DETAILED_SCRIPT_STYLE = `\nAnswer style: SCRIPT, DETAILED. Write the words a thoughtful, technically capable engineer could say out loud:
+- Start with ONE clear, conversational opening sentence on its own line, then a blank line. It must work as the instant opening and flow into the rest; don't repeat it as paragraph two.
+- Sound natural: contractions, first person, varied sentence lengths, transitions that follow the reasoning. No buzzwords, no lecture openings, no padded closing morals.
+- A significant behavioural question: about 200-300 spoken words. One relevant story with the context and stakes, the user's precise role, the hard part, what they did and why, and the outcome. Most of it on HOW and WHY, not setup. STAR is the shape, never printed labels.
+- A project walkthrough: about 230-350 spoken words: the real problem, the main parts and how data flows between them, what the user built, the key decisions and why, the challenges, then the outcome.
+- A design or architecture follow-up: the specific components, boundaries, error handling and trade-offs.
+- A programming concept: the correct definition first, then how it works underneath, a comparison or trade-off, and a short example if it helps (30-75 seconds).
+- A follow-up: answer the exact challenge using what was said before, usually 3-8 spoken sentences.
+- These lengths are guidelines, not quotas: a narrow question gets a short answer. Plain spoken paragraphs, no headings or labels.`;
+
 const CUES_STYLE = `\nAnswer style: CUES. The user wants prompts to talk around in their own words, not a script to read:
 - Line 1: ONE short headline sentence they can say straight away, directly answering the question, in their own voice. Then a blank line.
 - Then 3-4 cue lines. Each starts with "- " and a **bold keyword or short phrase** (2-4 words), optionally followed by a few plain words of detail (a number, a name, a result). Fragments only: no full sentences, no explanations, no filler.
@@ -427,10 +440,29 @@ ${style === 'cues' ? STAR_CUES : STAR_SCRIPT}
 // The shared core around one mode block. The mode block sits where the
 // technical rules used to be (after the answer style, before the notes on
 // what the request carries).
-function commonNotes(answerStyle, mode = 'interview') {
+// Settings > Answers: 'strict' (default when a request doesn't say) or 'detailed'.
+const DETAIL_LEVELS = new Set(['strict', 'detailed']);
+function normalizeDetail(detail) {
+  return detail === 'detailed' ? 'detailed' : 'strict';
+}
+
+// Detailed: the same prompt minus the strict fact rules, with longer answers.
+function detailedText(text) {
+  return text
+    .replace(', but only ones from their facts (see TRUTH FIRST)', '')
+    .replace("- Questions about the user's own experience: use their real facts from the transcript or background; if there are none, use short [placeholders] (see TRUTH FIRST).",
+      "- Questions about the user's own experience: tell one relevant story from the transcript or background, with the detail that makes it real.")
+    .replace('about 30 seconds out loud', 'about 60-120 seconds out loud, with the hard part and why each step was taken');
+}
+
+function commonNotes(answerStyle, mode = 'interview', detail = 'strict') {
   const styleName = normalizeAnswerStyle(answerStyle);
-  const style = styleName === 'cues' ? CUES_STYLE : SCRIPT_STYLE;
   const modeNotes = MODE_NOTES[normalizeMode(mode)](styleName);
+  if (normalizeDetail(detail) === 'detailed') {
+    const style = styleName === 'cues' ? CUES_STYLE : DETAILED_SCRIPT_STYLE;
+    return detailedText(`${HUMAN_VOICE}${style}${modeNotes}${CONTEXT_NOTE}${SCREEN_NOTE}${KNOWLEDGE_NOTE}`);
+  }
+  const style = styleName === 'cues' ? CUES_STYLE : SCRIPT_STYLE;
   return `${GROUNDING}${HUMAN_VOICE}${style}${modeNotes}${CONTEXT_NOTE}${SCREEN_NOTE}${KNOWLEDGE_NOTE}`;
 }
 
@@ -451,6 +483,12 @@ When the user types a question for you to answer AS THEM (an interview question 
 - One real story from their files or the transcript (if a STORY BANK is given, use one of its stories). Every fact must be in that material: no extra numbers, team sizes, durations, results, setbacks or "what changed after" that it doesn't state. If a detail isn't there, leave it out or use a short [placeholder].
 ${BANNED_TELLS}
 If background files from the user (CV/notes) are included, use them only for facts and never copy their wording.`;
+
+// Ask panel, Settings > Answers = Detailed: no TRUTH FIRST, longer answers.
+const ASK_SYSTEM_PROMPT_DETAILED = ASK_SYSTEM_PROMPT
+  .replace(`${GROUNDING}\n`, '')
+  .replace(/- The size of a real spoken answer:[^\n]*\n/, '- The size of a real spoken answer: a narrow question gets a few lines; a behavioural story or project walkthrough about 200-300 spoken words, mostly on how and why. End on a real detail, not a "which is why I\'m excited about this role" line.\n')
+  .replace(/- One real story from their files or the transcript[^\n]*\n/, '- One relevant story from their files or the transcript (if a STORY BANK is given, use one of its stories), told with the detail that makes it real.\n');
 
 const SUMMARY_SYSTEM_PROMPT = `You are summarizing a transcript of a live conversation (a meeting, interview, or call) between "You" (the user) and "Them" (whoever else was on the call: could be one person or several, all merged into "Them" since the app can't tell voices on that side apart). The transcript is auto-transcribed and may contain errors, filler words, or gaps. Do your best with what's there and don't invent content that isn't supported by it. Only report decisions, action items, and unresolved questions that are actually grounded in the transcript. If a category is empty, return an empty array for it rather than making something up.`;
 
@@ -491,9 +529,9 @@ const SUMMARY_SCHEMA = {
 };
 
 // Unknown modes (including "__proto__") fall back to general.
-function buildSystemPrompt(mode, answerStyle) {
+function buildSystemPrompt(mode, answerStyle, detail = 'strict') {
   const m = normalizeMode(mode);
-  return `${MODE_INTROS[m]}${commonNotes(answerStyle, m)}`;
+  return `${MODE_INTROS[m]}${commonNotes(answerStyle, m, detail)}`;
 }
 
 // ---- Conversation context (whole session, not a recent window) ----
@@ -565,8 +603,8 @@ function buildPreviousAnswersBlock(previousAnswers) {
 
 const NO_BACKGROUND_NOTE = `\n\nNo background about the user was provided (no CV or notes loaded, or none matched this question). You do NOT know their real projects, employers, schools, numbers or experience. For questions about their own experience, give a natural answer shape with short placeholders in square brackets that they fill in themselves, e.g. "[project name]", "[what you built]", "[result]". Never invent specifics to fill the gap.`;
 
-function buildKnowledgeBlock(knowledgeSnippets) {
-  if (!knowledgeSnippets || !knowledgeSnippets.length) return NO_BACKGROUND_NOTE;
+function buildKnowledgeBlock(knowledgeSnippets, detail = 'strict') {
+  if (!knowledgeSnippets || !knowledgeSnippets.length) return normalizeDetail(detail) === 'detailed' ? '' : NO_BACKGROUND_NOTE;
   const body = knowledgeSnippets.map((s) => `[from ${s.source}]\n${s.text}`).join('\n\n');
   return `\n\nRelevant background about the user, from their own files:\n\n${body}`;
 }
@@ -653,13 +691,13 @@ function latestHints({ mode, kind, intent, allowNoResponse, question }) {
 // stateBlock / direction: interview mode only (interviewStateFor()); absent
 // means the prompt is exactly what it was before Phase 2b.
 // briefBlock: interview mode only (briefFor()); absent = no brief, no change.
-function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock, storyBlock }) {
+function buildConversation({ transcript, previousAnswers, knowledgeSnippets, question, userQuestion, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock, storyBlock, detail }) {
   const capped = capTranscript(transcript);
   let context = briefBlock ? `${briefBlock}\n\n` : '';
   context += `FULL CONVERSATION SO FAR (chronological, oldest first; "You" = the user, "Them" = the other side):\n\n${capped || '(no transcript yet)'}`;
   context += buildPreviousAnswersBlock(previousAnswers);
   // Stories are background too: don't also say "no background was provided".
-  if (!storyBlock || (knowledgeSnippets && knowledgeSnippets.length)) context += buildKnowledgeBlock(knowledgeSnippets);
+  if (!storyBlock || (knowledgeSnippets && knowledgeSnippets.length)) context += buildKnowledgeBlock(knowledgeSnippets, detail);
   if (storyBlock) context += `\n\n${storyBlock}`;
   if (stateBlock) context += `\n\n${stateBlock}`;
   context += describeScreenshots(images);
@@ -774,10 +812,13 @@ const THINKING_HEADROOM_TOKENS = { minimal: 256, low: 1536, medium: 3072, high: 
 // No thinkingConfig sent (2.x model, or rejected): the model thinks at its default.
 const DEFAULT_THINKING_HEADROOM_TOKENS = 4096;
 
-function answerTokensFor(kind, instruction) {
-  if (kind === 'problem' || /```/.test(instruction || '')) return ANSWER_TOKENS.technical;
-  if (instruction) return ANSWER_TOKENS.detailed;
-  return kind === 'followup' ? ANSWER_TOKENS.followUp : ANSWER_TOKENS.spoken;
+// Settings > Answers = Detailed: room for 200-350 spoken words.
+const DETAILED_ANSWER_TOKENS = { spoken: 1500, followUp: 1200, detailed: 1800 };
+function answerTokensFor(kind, instruction, detail = 'strict') {
+  const t = normalizeDetail(detail) === 'detailed' ? { ...ANSWER_TOKENS, ...DETAILED_ANSWER_TOKENS } : ANSWER_TOKENS;
+  if (kind === 'problem' || /```/.test(instruction || '')) return t.technical;
+  if (instruction) return t.detailed;
+  return kind === 'followup' ? t.followUp : t.spoken;
 }
 
 // ---- Per-session adaptive state ----
@@ -1197,15 +1238,16 @@ async function generateSuggestion(params) {
     resolveThinkingLevel({ mode, quality, kind }),
     { type: interviewType, kind, quality: normalizeQuality(quality), question: mode === 'interview' ? named : '' }
   );
-  const answerTokens = answerTokensFor(kind, instruction);
+  const detail = normalizeDetail(params.detail);
+  const answerTokens = answerTokensFor(kind, instruction, detail);
 
   const { block: stateBlock, direction } = interviewStateFor(mode, params.interviewState);
   const conversation = buildConversation({
     transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock,
-    storyBlock: storiesFor(mode, params.stories).block,
+    storyBlock: storiesFor(mode, params.stories).block, detail,
   });
   const result = await callGemini({
-    systemPrompt: buildSystemPrompt(mode, answerStyle),
+    systemPrompt: buildSystemPrompt(mode, answerStyle, detail),
     parts: buildUserParts(conversation, images),
     generationConfig: { temperature: 0.4 },
     thinkingLevel,
@@ -1254,8 +1296,11 @@ const HEADLINE_MODE_RULES = {
 };
 const HEADLINE_NO_RESPONSE_RULE = `\n- Only if the LATEST section says this was triggered automatically and there's genuinely nothing useful to say: reply with exactly ${NO_RESPONSE_SENTINEL} and nothing else.`;
 
-function buildHeadlineSystemPrompt(mode) {
+function buildHeadlineSystemPrompt(mode, detail = 'strict') {
   const m = normalizeMode(mode);
+  if (normalizeDetail(detail) === 'detailed') {
+    return buildHeadlineSystemPrompt(m).replace(': if the question is about their experience and no matching fact is given, use a short [placeholder] instead.', '.');
+  }
   const situation = HEADLINE_SITUATIONS[m];
   const modeRules = `${HEADLINE_MODE_RULES[m]}${m === 'interview' ? '' : HEADLINE_NO_RESPONSE_RULE}`;
   return `${situation} Give ONLY the first sentence the user should say out loud right now, in their own voice, in reply to the latest question. A fuller answer is being written separately and follows a moment later; your sentence is what they start talking with while it loads.
@@ -1271,7 +1316,7 @@ function buildHeadlineSystemPrompt(mode) {
 // last couple of answers (they hold the code a follow-up is about) and the
 // knowledge snippets -- enough to say the right first sentence, small enough
 // to be quick.
-function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock, storyLine }) {
+function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnippets, question, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock, storyLine, detail }) {
   const recent = capTranscript(transcript, HEADLINE_TRANSCRIPT_CHARS);
   let context = briefBlock ? `${briefBlock}\n\n` : '';
   context += `RECENT CONVERSATION (oldest first; "You" = the user, "Them" = the other side):\n\n${recent || '(no transcript yet)'}`;
@@ -1280,7 +1325,7 @@ function buildHeadlineConversation({ transcript, previousAnswers, knowledgeSnipp
       .map((a) => ({ ...a, text: clip(a.text, HEADLINE_PREVIOUS_ANSWER_CHARS) }));
     context += buildPreviousAnswersBlock(lastFew);
   }
-  if (!storyLine || (knowledgeSnippets && knowledgeSnippets.length)) context += buildKnowledgeBlock(knowledgeSnippets);
+  if (!storyLine || (knowledgeSnippets && knowledgeSnippets.length)) context += buildKnowledgeBlock(knowledgeSnippets, detail);
   if (storyLine) context += `\n\n${storyLine}`;
   if (stateBlock) context += `\n\n${stateBlock}`;
   context += describeScreenshots(images);
@@ -1455,9 +1500,9 @@ async function generateHeadline(params) {
   const { block: briefBlock } = briefFor(mode, params.brief, { headline: true });
   // Same prompt, context, intent and kind whichever model writes it.
   const req = {
-    systemPrompt: buildHeadlineSystemPrompt(mode),
+    systemPrompt: buildHeadlineSystemPrompt(mode, params.detail),
     parts: buildUserParts(buildHeadlineConversation({
-      transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock,
+      transcript, previousAnswers, knowledgeSnippets, question: named, instruction, images, kind, mode, intent, allowNoResponse, stateBlock, direction, briefBlock, detail: params.detail,
       storyLine: storiesFor(mode, params.stories).line,
     }), images),
     generationConfig: { temperature: 0.3 },
@@ -1495,7 +1540,7 @@ async function generateHeadline(params) {
 }
 
 async function askFollowUp({
-  transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, brief, stories, signal, onChunk,
+  transcript, question, previousAnswers, images, knowledgeSnippets, mode, quality, brief, stories, detail, signal, onChunk,
 }) {
   const hasImages = !!(images && images.length);
   const kind = classifyQuestion(question, { hasImages, ...priorContext(previousAnswers) });
@@ -1505,9 +1550,9 @@ async function askFollowUp({
   const { block: briefBlock } = briefFor(normalizeMode(mode), brief);
   // Interview mode: a typed behavioural question gets the story bank too.
   const { block: storyBlock } = storiesFor(normalizeMode(mode), stories);
-  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, userQuestion: question, images, briefBlock, storyBlock });
+  const conversation = buildConversation({ transcript, previousAnswers, knowledgeSnippets, userQuestion: question, images, briefBlock, storyBlock, detail });
   const result = await callGemini({
-    systemPrompt: ASK_SYSTEM_PROMPT,
+    systemPrompt: normalizeDetail(detail) === 'detailed' ? ASK_SYSTEM_PROMPT_DETAILED : ASK_SYSTEM_PROMPT,
     parts: buildUserParts(conversation, images),
     generationConfig: { temperature: 0.4 },
     thinkingLevel,
@@ -1739,6 +1784,8 @@ module.exports = {
   askFollowUp,
   summarizeSession,
   summarizeJobAd,
+  DETAIL_LEVELS,
+  normalizeDetail,
   invitesQuestions,
   extractStories,
   storiesFor,

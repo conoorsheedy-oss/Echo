@@ -389,6 +389,14 @@
             </select>
           </label>
           <p class="answer-setting-note">Auto thinks harder only when an interview question is a new problem to solve (write a function, a maths or probability question, a puzzle, design a system, or a problem on attached screenshots). Follow-ups about your code ("why did you use X?", "what's the complexity?", "what if the input is empty?") and behavioural questions stay quick. Fast always answers quickest; Max always thinks hardest (slower).</p>
+          <label class="answer-setting" for="answer-detail-select">
+            <span>Answers</span>
+            <select id="answer-detail-select" title="Detailed: longer, richer answers with fewer fact rules. Strict: short answers that only use facts from your files.">
+              <option value="detailed">Detailed (longer, fewer limits)</option>
+              <option value="strict">Strict (short, only facts from my files)</option>
+            </select>
+          </label>
+          <p class="answer-setting-note">Detailed gives longer, richer answers (about 200-300 words for big questions) and drops the strict fact rules, so check names, numbers and stories before you say them. Strict keeps answers short and only states what's in your files, with [placeholders] for anything missing.</p>
           <label class="answer-setting" for="answer-style-select">
             <span>Answer style</span>
             <select id="answer-style-select" title="Script: full sentences to say. Cues: a first line to say, then keywords to talk around.">

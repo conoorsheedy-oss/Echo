@@ -2,6 +2,8 @@
 
 ## 0.2.0 – unreleased
 
+- **Settings > Answers: Detailed (default) or Strict.** Detailed (adapted from a friend's fork) gives longer, richer answers (about 200-300 spoken words for big behavioural questions and project walkthroughs) and drops the strict fact rules: no TRUTH FIRST, no [placeholder] fallback, no "never add a setback" rule. Check names, numbers and stories before you say them. Strict is the previous behaviour: short answers, only facts from your files, [placeholders] for anything missing.
+
 - **Better grounding (ideas from a friend's fork).** Search counts generic interview words ("tell", "time", "project", "experience"...) at a fraction, scores very short chunks as if longer, and returns at most 2 snippets per file. Plans and cheat sheets aren't treated as proof: "what to say", "suggested tests", "future improvements" are suggestions, and prototyped / approved / shipped / measured stay separate. Technical details the files don't cover are explained as an example ("if I were building it..."), never as the user's own work.
 
 - **Fix: invented project details in "tell me about yourself".** Keyword search was returning a bare heading ("Project deep-dive 1: ovgraph (lead with this)") instead of the profile, and the model described the project from its name. Short headings now always stay with the paragraph under them; intro questions ("tell me about yourself", "walk me through your CV") also search with profile words and favour profile / about / CV files; and the prompt forbids describing anything from its name alone.

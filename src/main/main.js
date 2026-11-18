@@ -931,6 +931,13 @@ function validateRequestId(requestId) {
   return requestId;
 }
 
+// Settings > Answers: 'detailed' (longer, fewer fact rules) or 'strict'.
+function validateDetail(detail) {
+  if (detail === undefined || detail === null) return 'strict';
+  if (typeof detail !== 'string' || !ai.DETAIL_LEVELS.has(detail)) throw new Error('Invalid answers setting.');
+  return detail;
+}
+
 function validateQuality(quality) {
   if (quality === undefined || quality === null) return 'auto';
   if (typeof quality !== 'string' || !ai.QUALITY_SETTINGS.has(quality)) throw new Error('Invalid quality setting.');
@@ -988,7 +995,7 @@ function validateIntent(intent) {
 // boolean; anything else means off.
 // intent: the renderer's intent label (re-checked here, recomputed if
 // missing). A skipped automatic request resolves { skipped: true, reason }.
-handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images, headline, intent, spare } = {}) => {
+handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instruction, question, previousAnswers, quality, answerStyle, images, headline, intent, spare, detail } = {}) => {
   const id = validateRequestId(requestId);
   // An early-start answer still on screen that this automatic request must
   // not abort (renderer.js CALM rule; ai-requests.js).
@@ -1024,6 +1031,7 @@ handle('ai:suggest', async (evt, { requestId, kind, transcript, mode, instructio
       previousAnswers: prior,
       quality: q,
       answerStyle: style,
+      detail: validateDetail(detail),
       images: preparedImages,
       knowledgeSnippets,
     };
@@ -1133,7 +1141,7 @@ handle('stories:rebuild', async () => {
   return storyView(storyStore.get());
 });
 
-handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAnswers, quality, images } = {}) => {
+handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAnswers, quality, images, detail } = {}) => {
   const id = validateRequestId(requestId);
   assertOptionalString(transcript, 'transcript', MAX_TRANSCRIPT_CHARS);
   assertOptionalString(question, 'question', 4000);
@@ -1169,6 +1177,7 @@ handle('ai:ask', async (evt, { requestId, transcript, question, mode, previousAn
       images: preparedImages,
       knowledgeSnippets,
       brief: briefPlan,
+      detail: validateDetail(detail),
       stories: storyPlan ? { block: storyPlan.block, headlineLine: storyPlan.headlineLine } : null,
       signal: req.signal,
       onChunk: chunkForwarder(evt, id),

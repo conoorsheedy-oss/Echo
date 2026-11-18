@@ -290,3 +290,42 @@ test('search: generic interview words barely count, tiny chunks can\'t win, max 
   assert.match(system, /what was prototyped, what someone approved, what was shipped and what was measured/);
   assert.match(system, /frame it as an example \("For example, if I were building it, I'd\.\.\."\), never as something the user did/);
 });
+
+test('Answers = Detailed: no TRUTH FIRST or placeholders, longer answers; Strict unchanged', async () => {
+  for (const style of ['script', 'cues']) {
+    const strict = ai.buildSystemPrompt('interview', style);
+    const detailed = ai.buildSystemPrompt('interview', style, 'detailed');
+    assert.equal(ai.buildSystemPrompt('interview', style, 'strict'), strict, 'strict is the default');
+    assert.match(strict, /TRUTH FIRST/);
+    assert.ok(!/TRUTH FIRST/.test(detailed), `${style}: no TRUTH FIRST`);
+    assert.ok(!/\[placeholders?\] \(see TRUTH FIRST\)/.test(detailed));
+    assert.ok(!/Never add a setback, a struggle/.test(detailed));
+    assert.match(detailed, /tell one relevant story from the transcript or background/);
+  }
+  assert.match(ai.buildSystemPrompt('interview', 'script', 'detailed'), /about 200-300 spoken words/);
+  assert.ok(!/about 200-300 spoken words/.test(ai.buildSystemPrompt('interview', 'script')));
+  assert.ok(!/use a short \[placeholder\] instead/.test(ai.buildHeadlineSystemPrompt('interview', 'detailed')));
+  assert.match(ai.buildHeadlineSystemPrompt('interview'), /use a short \[placeholder\] instead/);
+  assert.equal(ai.normalizeDetail('nonsense'), 'strict');
+  // Requests: detailed has a bigger budget, no "no background" note; strict is byte-identical to before.
+  const calls = [];
+  global.fetch = async (url, init) => {
+    calls.push(JSON.parse(init.body));
+    return new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Sure.' }] }, finishReason: 'STOP' }] })}\n\n`, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  };
+  const params = { transcript: 'Them: Tell me about a project you are proud of.', question: 'Tell me about a project you are proud of.', mode: 'interview' };
+  await ai.generateSuggestion({ ...params, detail: 'detailed', onChunk: () => {} });
+  await ai.generateSuggestion({ ...params, onChunk: () => {} });
+  const [d, s] = calls;
+  assert.ok(d.generationConfig.maxOutputTokens > s.generationConfig.maxOutputTokens);
+  const text = (b) => b.contents[0].parts.map((p) => p.text || '').join('\n');
+  assert.ok(!/No background about the user was provided/.test(text(d)));
+  assert.match(text(s), /No background about the user was provided/);
+  // Ask panel.
+  calls.length = 0;
+  await ai.askFollowUp({ transcript: '', question: 'Tell me about yourself', mode: 'interview', detail: 'detailed', onChunk: () => {} });
+  await ai.askFollowUp({ transcript: '', question: 'Tell me about yourself', mode: 'interview', onChunk: () => {} });
+  assert.ok(!/TRUTH FIRST/.test(calls[0].systemInstruction.parts[0].text));
+  assert.match(calls[0].systemInstruction.parts[0].text, /about 200-300 spoken words/);
+  assert.match(calls[1].systemInstruction.parts[0].text, /TRUTH FIRST/);
+});

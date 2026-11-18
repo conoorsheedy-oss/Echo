@@ -2627,6 +2627,23 @@ qualitySelect.addEventListener('change', () => {
   try { localStorage.setItem(QUALITY_KEY, currentQuality()); } catch (err) { /* not remembered -- fine */ }
 });
 
+// ---- Answers: Detailed / Strict (Settings) ----
+const DETAIL_KEY = 'echo.answerDetail';
+const DETAIL_VALUES = ['detailed', 'strict'];
+const answerDetailSelect = document.getElementById('answer-detail-select');
+function currentDetail() {
+  return DETAIL_VALUES.includes(answerDetailSelect.value) ? answerDetailSelect.value : 'detailed';
+}
+try {
+  const saved = localStorage.getItem(DETAIL_KEY);
+  answerDetailSelect.value = DETAIL_VALUES.includes(saved) ? saved : 'detailed';
+} catch (err) {
+  answerDetailSelect.value = 'detailed';
+}
+answerDetailSelect.addEventListener('change', () => {
+  try { localStorage.setItem(DETAIL_KEY, currentDetail()); } catch (err) { /* not remembered -- fine */ }
+});
+
 // ---- Answer style (Settings + the Script / Cues toggle on the answer card) ----
 // 'script': full spoken sentences, one per line. 'cues': a big first line to
 // say, then a few bold keywords to talk around in your own words.
@@ -3004,6 +3021,7 @@ async function requestSuggestion(instruction, opts = {}) {
       previousAnswers: previousAnswersForSend(),
       quality: currentQuality(),
       answerStyle: req.answerStyle,
+      detail: currentDetail(),
       images: shots.images,
       headline: req.useHeadline,
       intent: intentInfo.intent,
@@ -3143,6 +3161,7 @@ chatForm.addEventListener('submit', async (e) => {
       mode: modeSelect.value,
       previousAnswers: previousAnswersForSend(),
       quality: currentQuality(),
+      detail: currentDetail(),
       images: shots.images,
     });
     screenshotsSent(shots.ids);

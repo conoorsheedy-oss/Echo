@@ -156,6 +156,8 @@ Gestures are ignored while Settings is open, while you're typing in Echo, and in
   - If your system asks for reduced transparency (Windows: Settings > Accessibility > Visual effects > Transparency effects off; macOS: Reduce transparency), Echo stays solid and the slider is disabled.
   - Echo's blur only blurs its own content: Windows doesn't blur other apps' windows behind a transparent Electron window, so what's behind shows through sharp. Pick the level that's comfortable over your own call and editor.
 
+**Answers: Detailed or Strict** (Settings > Answers). Detailed (default) gives longer, richer answers and drops the strict fact rules, so it can add details that aren't in your files: check before you say them. Strict keeps answers short and only states what's in your files, with [placeholders] for anything missing.
+
 ### How Echo keeps answers fast
 
 - **End of speech**: with Deepgram, a question is answered the moment Deepgram reports the speaker has stopped (`speech_final`, about 0.2 s after the last word; `DEEPGRAM_ENDPOINTING_MS` changes that pause). With Groq, audio is cut 0.55 s after someone stops and a question is answered 150 ms after it's transcribed. Questions are recognised by their wording ("what's the complexity", "walk me through your code", "write a function...") even without a question mark; a line that trails off ("and the...") waits up to 1.5 s for the rest.
