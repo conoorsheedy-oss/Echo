@@ -2,6 +2,8 @@
 
 ## 0.2.0 – unreleased
 
+- **Fix: long answers cut off by "Gemini took too long".** The 45 s timeout covered the whole streamed answer, so a hard coding problem (high thinking, then a walk-through and full code) could be killed mid-answer. Now it only covers the wait for the first text (75 s for high thinking); after that the answer continues while text keeps arriving (20 s max silence, 150 s hard cap). If it still runs out of time, the text so far stays on screen with a cut-off note instead of an error. The instant first line keeps its strict 12 s limit.
+
 - **Ask panel in Interview mode answers interviewer questions like the answer card.** Typing "Design a URL shortener" or "Tell me about yourself" into Ask now gets the full interview answer (same prompt, rules, format, thinking level, brief and story bank as a spoken question). Questions for the assistant ("what should I say?", "what did they mean?", "summarise") still get the chat reply.
 
 - **Settings > Answers: Detailed (default) or Strict.** Detailed (adapted from a friend's fork) gives longer, richer answers (about 200-300 spoken words for big behavioural questions and project walkthroughs) and drops the strict fact rules: no TRUTH FIRST, no [placeholder] fallback, no "never add a setback" rule. Check names, numbers and stories before you say them. Strict is the previous behaviour: short answers, only facts from your files, [placeholders] for anything missing.

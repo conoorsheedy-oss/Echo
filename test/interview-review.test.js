@@ -362,3 +362,56 @@ test('Ask panel in Interview mode: an interviewer question gets the interview an
   await ai.askFollowUp({ transcript: '', question: 'Design a URL shortener', mode: 'meeting', onChunk: () => {} });
   assert.ok(!/Interview rules:/.test(calls[0].systemInstruction.parts[0].text));
 });
+
+// ---- Long answers: the timeout covers the wait for text, not the whole answer ----
+
+function slowStream(pieces, gapMs, { stallAfter = Infinity } = {}) {
+  return async (url, init) => {
+    const enc = new TextEncoder();
+    const body = new ReadableStream({
+      async start(controller) {
+        const onAbort = () => { try { controller.error(init.signal.reason); } catch (e) { /* closed */ } };
+        init.signal.addEventListener('abort', onAbort);
+        for (let i = 0; i < pieces.length; i++) {
+          if (i >= stallAfter) return; // never closes: Gemini went silent
+          await new Promise((r) => setTimeout(r, gapMs));
+          if (init.signal.aborted) return;
+          const finish = i === pieces.length - 1 ? ',"finishReason":"STOP"' : '';
+          controller.enqueue(enc.encode(`data: {"candidates":[{"content":{"parts":[{"text":${JSON.stringify(pieces[i])}}]}${finish}}]}\n\n`));
+        }
+        init.signal.removeEventListener('abort', onAbort);
+        controller.close();
+      },
+    });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+  };
+}
+
+test('a streamed answer longer than the timeout finishes while text keeps coming', async () => {
+  global.fetch = slowStream(['First line. ', 'Second line. ', 'Third line. ', 'Done.'], 40);
+  const chunks = [];
+  const result = await ai._callGemini({ systemPrompt: 's', parts: [{ text: 'q' }], thinkingLevel: 'low', timeoutMs: 100, onChunk: (d) => chunks.push(d) });
+  assert.equal(result.text, 'First line. Second line. Third line. Done.', '160 ms in total, more than the 100 ms timeout');
+  assert.equal(chunks.length, 4);
+});
+
+test('a stream that stops mid-answer keeps its text with a cut-off note, not an error', async () => {
+  const d = ai._createDeadline(undefined, 60, 1000);
+  assert.ok(!d.timedOut());
+  await new Promise((r) => setTimeout(r, 90));
+  assert.ok(d.timedOut());
+  d.clear();
+  // Text arrives, then Gemini goes silent: keep the text, mark it cut off.
+  global.fetch = slowStream(['Here is the approach. ', 'And the code...', 'never sent'], 10, { stallAfter: 2 });
+  const partial = await ai._callGemini({ systemPrompt: 's', parts: [{ text: 'q' }], thinkingLevel: 'low', timeoutMs: 200, idleMs: 60, onChunk: () => {} });
+  assert.equal(partial.text, 'Here is the approach. And the code...');
+  assert.equal(partial.finishReason, 'TIME_LIMIT');
+  // No text at all within the first-text window: still an error.
+  global.fetch = slowStream(['never'], 10, { stallAfter: 0 });
+  await assert.rejects(ai._callGemini({ systemPrompt: 's', parts: [{ text: 'q' }], thinkingLevel: 'low', timeoutMs: 80, onChunk: () => {} }), (err) => err.code === 'TIMEOUT');
+  // The instant first line keeps a strict total limit.
+  global.fetch = slowStream(['a ', 'b ', 'c ', 'd'], 40);
+  const head = await ai._callGemini({ systemPrompt: 's', parts: [{ text: 'q' }], thinkingLevel: 'minimal', timeoutMs: 90, streamOnly: true, onChunk: () => {} });
+  assert.equal(head.finishReason, 'TIME_LIMIT', 'cut at 90 ms total');
+  assert.match(ai._withCutOffNote({ text: 'partial', finishReason: 'TIME_LIMIT' }), /\[cut off: Gemini was taking too long to finish/);
+});

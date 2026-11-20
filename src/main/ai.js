@@ -30,7 +30,15 @@ const DEFAULT_GROQ_STT_MODEL = 'whisper-large-v3-turbo';
 const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 
 const STT_TIMEOUT_MS = 20_000; // a chunk (at most ~12 s of speech) transcribes well within this
-const AI_TIMEOUT_MS = 45_000; // suggestions + chat answers
+const AI_TIMEOUT_MS = 45_000; // suggestions + chat answers (until a streamed answer starts)
+// Streamed answers: the timeout above (longer for 'high' thinking) only
+// covers the wait for the first text. After that the answer keeps going as
+// long as text keeps arriving, up to a hard cap: a hard coding problem
+// (high thinking, then a walk-through and full code) can take over 45 s, and
+// killing it mid-answer threw away text the user was already reading.
+const HIGH_THINKING_FIRST_TEXT_MS = 75_000;
+const STREAM_IDLE_MS = 20_000; // longest silence between pieces of text
+const STREAM_MAX_MS = 150_000; // hard cap for one streamed answer
 const HEADLINE_TIMEOUT_MS = 12_000; // instant first line: useless once the full answer is out
 const SUMMARY_TIMEOUT_MS = 75_000; // a summary covers the whole transcript
 const KEY_TEST_TIMEOUT_MS = 15_000;
@@ -902,8 +910,9 @@ async function postGemini(endpoint, req) {
           'content-type': 'application/json',
         },
         body: JSON.stringify(geminiBody(req, withThinking, level, model)),
-        // Covers the whole response, including reading a stream.
-        signal: combineSignals(req.signal, req.timeoutMs),
+        // Covers the whole response, including reading a stream (a streamed
+        // answer passes its own deadline instead: see streamGemini()).
+        signal: req.deadline ? req.deadline.signal : combineSignals(req.signal, req.timeoutMs),
       });
     } catch (err) {
       throw networkError('gemini', err, req.signal);
@@ -1000,9 +1009,50 @@ function streamReadError(err, callerSignal) {
   return aiError('STREAM_FAILED', 'The answer stream was interrupted.');
 }
 
+// A deadline that can be pushed back: firstMs for the first text, then
+// bump(ms) after each piece; never past maxMs in total. Fires as a
+// TimeoutError, which the error mapping reports as TIMEOUT.
+function createDeadline(callerSignal, firstMs, maxMs) {
+  const ctrl = new AbortController();
+  const fire = () => ctrl.abort(new DOMException('Gemini took too long.', 'TimeoutError'));
+  let idle = setTimeout(fire, firstMs);
+  const cap = setTimeout(fire, maxMs);
+  return {
+    signal: callerSignal ? AbortSignal.any([callerSignal, ctrl.signal]) : ctrl.signal,
+    timedOut: () => ctrl.signal.aborted,
+    bump(ms) {
+      clearTimeout(idle);
+      idle = setTimeout(fire, ms);
+    },
+    clear() {
+      clearTimeout(idle);
+      clearTimeout(cap);
+    },
+  };
+}
+
+function streamDeadlineFor(req) {
+  const base = req.timeoutMs || AI_TIMEOUT_MS;
+  // The instant first line keeps a strict total limit: late, it's useless.
+  if (req.streamOnly) return createDeadline(req.signal, base, base);
+  const first = req.thinkingLevel === 'high' ? Math.max(base, HIGH_THINKING_FIRST_TEXT_MS) : base;
+  return createDeadline(req.signal, first, Math.max(first, STREAM_MAX_MS));
+}
+
 // Streams one answer; onChunk(delta) gets each new piece of visible text.
-// Resolves { text, finishReason } once the stream ends.
+// Resolves { text, finishReason } once the stream ends. If it runs out of
+// time after text has arrived, resolves with that text and finishReason
+// 'TIME_LIMIT' (shown with a cut-off note) instead of failing.
 async function streamGemini(req, onChunk) {
+  const deadline = streamDeadlineFor(req);
+  try {
+    return await streamGeminiWithin({ ...req, deadline }, onChunk, deadline);
+  } finally {
+    deadline.clear();
+  }
+}
+
+async function streamGeminiWithin(req, onChunk, deadline) {
   const res = await postGemini('streamGenerateContent?alt=sse', req);
   if (!res.body || typeof res.body.getReader !== 'function') {
     throw aiError('STREAM_FAILED', 'Gemini did not send a stream.');
@@ -1041,6 +1091,7 @@ async function streamGemini(req, onChunk) {
     const delta = parts.filter((p) => !p.thought).map((p) => p.text || '').join('');
     if (delta) {
       text += delta;
+      deadline.bump(req.idleMs || STREAM_IDLE_MS); // idleMs: tests only
       try {
         onChunk(delta);
       } catch (err) {
@@ -1062,6 +1113,11 @@ async function streamGemini(req, onChunk) {
       parser.end();
     }
   } catch (err) {
+    // Out of time part-way: keep what the user is already reading.
+    if (text.trim() && deadline.timedOut() && !(req.signal && req.signal.aborted)) {
+      reader.cancel().catch(() => {});
+      return { text: text.trim(), finishReason: 'TIME_LIMIT' };
+    }
     throw streamReadError(err, req.signal);
   }
   if (streamError) {
@@ -1108,6 +1164,9 @@ function withCutOffNote({ text, finishReason }) {
   // returning a truncated solution.
   if (finishReason === 'MAX_TOKENS') {
     return `${text}\n\n[cut off: hit the output length limit; click Regenerate, or try a smaller/more specific question]`;
+  }
+  if (finishReason === 'TIME_LIMIT') {
+    return `${text}\n\n[cut off: Gemini was taking too long to finish; click Regenerate, or set Quality to Fast]`;
   }
   return text;
 }
@@ -1803,6 +1862,9 @@ module.exports = {
   askFollowUp,
   summarizeSession,
   summarizeJobAd,
+  _createDeadline: createDeadline,
+  _callGemini: callGemini,
+  _withCutOffNote: withCutOffNote,
   isInterviewerQuestion,
   DETAIL_LEVELS,
   normalizeDetail,
